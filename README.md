@@ -48,6 +48,7 @@ The reference system is working with:
 - Debian graphical PolicyKit prompts
 - Debian Blueman applet
 - automatic mirroring of Debian application launchers into MATE
+- automatic `(Host)` suffixes on all mirrored Debian application names
 - coexistence of Xenial-native and Debian-host versions of the same application
 - XSMP/ICE integration so compliant host applications close normally during MATE logout
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
@@ -59,7 +60,11 @@ The current architecture/build handoff is in:
 
 - [`docs/CURRENT-HANDOFF.md`](docs/CURRENT-HANDOFF.md)
 
-That document is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
+Host application labeling behavior is documented in:
+
+- [`docs/HOST-APP-LABELING.md`](docs/HOST-APP-LABELING.md)
+
+The handoff is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
 
 ## Design rules
 
@@ -69,6 +74,7 @@ That document is the canonical technical checkpoint and is updated only after a 
 4. Prefer generic integration fixes over per-application hacks.
 5. Install modern applications on Debian, not inside Xenial, unless there is a specific reason otherwise.
 6. Mirrored host launchers use distinct desktop IDs so they cannot silently replace Xenial-native launchers.
+7. Every mirrored Debian application is visibly suffixed with `(Host)` so the execution side is always unambiguous.
 
 ## Security note
 
