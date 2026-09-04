@@ -53,6 +53,7 @@ The reference system is working with:
 - Debian Blueman applet
 - automatic mirroring of Debian application launchers into MATE
 - automatic `(Host)` suffixes on all mirrored Debian application names
+- `(Host)` suffixes also preserved in Debian Caja `Open With` and file-context application menus through a private Caja XDG application view
 - coexistence of Xenial-native and Debian-host versions of the same application
 - XSMP/ICE integration so compliant host applications close normally during MATE logout
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
@@ -65,7 +66,7 @@ The current architecture/build handoff is in:
 
 - [`docs/CURRENT-HANDOFF.md`](docs/CURRENT-HANDOFF.md)
 
-Host Caja desktop integration is documented in:
+Host Caja desktop integration, including its private XDG application view, is documented in:
 
 - [`docs/HOST-CAJA.md`](docs/HOST-CAJA.md)
 
@@ -89,6 +90,7 @@ The handoff is the canonical technical checkpoint and is updated only after a tr
 6. Install modern applications on Debian, not inside Xenial, unless there is a specific reason otherwise.
 7. Mirrored host launchers use distinct desktop IDs so they cannot silently replace Xenial-native launchers.
 8. Every mirrored Debian application is visibly suffixed with `(Host)` so the execution side is always unambiguous.
+9. Debian's real `.desktop` files remain untouched; host Caja uses a generated private XDG view when it needs `(Host)` labels while preserving native MIME/default-app IDs.
 
 ## Security note
 
