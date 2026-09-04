@@ -27,3 +27,7 @@ Accepted project changes are recorded here after they are tested and approved.
 - Added a second generated XDG application view at `/var/lib/maverick-host-apps/caja-xdg/applications` for Debian Caja. It preserves original Debian desktop IDs, `Exec=` commands, MIME associations and metadata while appending `(Host)` to main and localized application names.
 - Scoped host Caja to `XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share`, restoring `(Host)` labels in `Open With` and file-context application menus without modifying Debian's real `.desktop` files.
 - Reused the existing host-app synchronizer and path watcher to maintain both the Xenial `debian-*` launcher mirror and the host-Caja XDG view; no additional daemon or watcher was introduced.
+- Extended the host-Caja XDG view to include Xenial-native MIME handlers with unique `xenial-` desktop IDs so host and Xenial applications can coexist in Caja's `Open With` menus.
+- Added generic `/usr/local/bin/xenial-run`, which locates the already-running Xenial MATE schroot session from the live `mate-panel` process, imports its graphical/session environment, and launches Xenial commands with `schroot --run-session`.
+- Confirmed the dual-handler case with GDebi: `gdebi.desktop` remains the Debian-host handler labeled `(Host)`, while `xenial-gdebi.desktop` exposes the Xenial-native installer for the same `application/vnd.debian.binary-package` MIME type.
+- Confirmed both host and Xenial GDebi choices are visible again in Debian Caja's `.deb` `Open With` menu.
