@@ -16,4 +16,5 @@ Accepted project changes are recorded here after they are tested and approved.
 - Removed recursive `/run` binding from the schroot design; only required runtime paths are exposed.
 - Confirmed normal login, logout, shutdown and reboot after stale schroot cleanup.
 - Confirmed Discord works when installed on the Debian host and exposed through the bridge rather than installed inside Xenial.
-- Accepted `(Host)` as the future visible label for all mirrored host applications; implementation remains pending testing.
+- Added and tested generic `(Host)` suffixing for all mirrored Debian application names, including localized `Name[...]` entries while leaving desktop-action labels unchanged.
+- Confirmed the existing host-app synchronizer/path watcher applies `(Host)` automatically to both current and future mirrored applications with no additional service or daemon.
