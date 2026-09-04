@@ -23,7 +23,7 @@ This policy applies to **all** mirrored host applications, not only cases where 
 
 `(Host)` describes the architecture rather than the current distribution name. The application is executing on the real host operating system while Xenial provides the desktop userspace. The label therefore remains correct even if the host distribution changes later.
 
-## Implementation
+## Xenial menu implementation
 
 No additional daemon, watcher, or per-application rule is used.
 
@@ -33,13 +33,13 @@ The existing synchronizer:
 /usr/local/sbin/maverick-sync-host-apps
 ```
 
-already rewrites Debian `.desktop` files before placing them below:
+rewrites Debian `.desktop` files before placing them below:
 
 ```text
 /var/lib/maverick-host-apps/applications
 ```
 
-The synchronizer now also appends ` (Host)` to the main application `Name=` and localized `Name[...]` keys in the `[Desktop Entry]` section.
+For the Xenial menu view, the synchronizer appends ` (Host)` to the main application `Name=` and localized `Name[...]` keys in the `[Desktop Entry]` section.
 
 The relevant logic is:
 
@@ -130,21 +130,66 @@ application appears in Xenial MATE menu
 
 No additional runtime component was introduced for this feature.
 
+## Host Caja `Open With` and file-context menus
+
+Once Debian Caja became the primary file manager and desktop owner, its `Open With` menus no longer read the Xenial `debian-*` mirror. Caja is a Debian process, so without an override it reads the host's normal application database and shows unmodified names such as `Firefox ESR` or `Discord`.
+
+The real Debian `.desktop` files are intentionally **not** renamed. Instead, the same synchronizer now also maintains a private host-Caja XDG application view:
+
+```text
+/var/lib/maverick-host-apps/caja-xdg/applications
+```
+
+That view differs from the Xenial menu mirror:
+
+```text
+Xenial menu view
+  desktop IDs         -> debian-* prefix
+  Exec=               -> host-run wrapper
+  Name=/Name[locale]  -> append (Host)
+
+Host Caja view
+  desktop IDs         -> original Debian IDs
+  Exec=               -> original direct host command
+  Name=/Name[locale]  -> append (Host)
+```
+
+Keeping the original desktop IDs and `Exec=` lines in Caja's private view preserves native Debian MIME/default-application behavior while restoring the `(Host)` labels in Caja's application-choice menus.
+
+Host Caja is launched with:
+
+```text
+XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share
+```
+
+This environment is scoped to Caja; Debian's normal application database remains untouched.
+
+The same existing synchronizer/path watcher maintains both generated views, so future Debian applications automatically receive `(Host)` labels in both the Xenial menu and host Caja's `Open With` menus.
+
 ## Current launcher policy
 
 ```text
-desktop ID           → prefix filename with debian-
-main Name=           → append " (Host)"
-localized Name[]=    → append " (Host)"
-desktop-action Name= → preserve
-Exec=                → wrap with host-run
-TryExec=             → remove
-DBusActivatable=     → force false
-OnlyShowIn=          → remove
-NotShowIn=           → remove
-NoDisplay=true       → preserve
-Hidden=true          → preserve
-Categories           → preserve
+Xenial menu mirror:
+  desktop ID           -> prefix filename with debian-
+  main Name=           -> append " (Host)"
+  localized Name[]=    -> append " (Host)"
+  desktop-action Name= -> preserve
+  Exec=                -> wrap with host-run
+  TryExec=             -> remove
+  DBusActivatable=     -> force false
+  OnlyShowIn=          -> remove
+  NotShowIn=           -> remove
+  NoDisplay=true       -> preserve
+  Hidden=true          -> preserve
+  Categories           -> preserve
+
+Host Caja XDG view:
+  desktop ID           -> preserve original ID
+  main Name=           -> append " (Host)"
+  localized Name[]=    -> append " (Host)"
+  desktop-action Name= -> preserve
+  Exec=                -> preserve original host command
+  MIME/default-app IDs -> preserve
 ```
 
 This behavior was tested successfully on the reference system on 2026-09-04.
