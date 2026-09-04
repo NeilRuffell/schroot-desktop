@@ -296,9 +296,11 @@ The accepted generic fix is a second generated XDG application view:
 /var/lib/maverick-host-apps/caja-xdg/applications
 ```
 
-It is maintained by the **same existing app synchronizer and watcher**. No new daemon or watcher was added.
+It is maintained by the **same existing app synchronizer**. No new daemon, watcher, or separate synchronizer was added.
 
-For this Caja-specific view:
+## Debian entries
+
+For Debian applications in this Caja-specific view:
 
 ```text
 desktop ID           -> preserve original Debian ID
@@ -316,6 +318,77 @@ XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share
 ```
 
 This restores `(Host)` labels in `Open With` and file-context application menus without modifying Debian's real `.desktop` files and without breaking native Debian MIME/default-application IDs.
+
+## Xenial-native MIME handlers
+
+Host Caja must also see Xenial-native handlers. Otherwise applications can remain visible in the MATE panel menus but disappear from Caja's `Open With` choices.
+
+The confirmed example was GDebi. Both Debian and Xenial provide:
+
+```text
+gdebi.desktop
+MimeType=application/vnd.debian.binary-package;
+```
+
+The accepted generic policy is to add Xenial application entries to the same private Caja view with unique `xenial-` desktop IDs:
+
+```text
+Debian:
+  gdebi.desktop
+  Name=GDebi Package Installer (Host)
+  Exec=gdebi-gtk %f
+
+Xenial:
+  xenial-gdebi.desktop
+  Name=GDebi Package Installer
+  Exec=/usr/local/bin/xenial-run gdebi-gtk %f
+```
+
+Policy for Xenial entries:
+
+```text
+desktop ID          -> prefix with xenial-
+Name=/Name[locale]  -> preserve original Xenial name
+Exec=               -> wrap with /usr/local/bin/xenial-run
+TryExec=             -> remove
+DBusActivatable=    -> force false when present
+MimeType=           -> preserve
+Categories/metadata -> preserve
+```
+
+This allows Debian-host and Xenial-native applications to coexist for the same MIME type while keeping the execution side obvious: Debian handlers carry `(Host)` and Xenial handlers do not.
+
+## `xenial-run`
+
+`/usr/local/bin/xenial-run` launches commands inside the **already-running Xenial MATE schroot session**.
+
+It locates the live `mate-panel` process for the current user, verifies that its `/proc/<pid>/root` is `/run/schroot/mount/xenial-*`, imports that process's session environment, and then executes:
+
+```text
+schroot --run-session -c <active-xenial-session> --preserve-environment ...
+```
+
+The live Xenial session environment was confirmed to contain the required graphical/session values:
+
+```text
+DISPLAY=:0
+XAUTHORITY=$HOME/.Xauthority
+DBUS_SESSION_BUS_ADDRESS=<Xenial session bus>
+PULSE_SERVER=unix:/run/user/$UID/pulse/native
+XDG_RUNTIME_DIR=/run/user/$UID
+SESSION_MANAGER=<Xenial MATE session manager>
+ICEAUTHORITY=$HOME/.ICEauthority
+```
+
+A manual `schroot --run-session` launch using this environment successfully opened Xenial GDebi. After the generated Xenial entries were added and Caja restarted, both GDebi choices were visible again for `.deb` files.
+
+The existing synchronizer scans Xenial application directories whenever it runs. No new watcher was added. If Xenial application launchers later change independently of Debian launcher changes, rerun:
+
+```bash
+sudo /usr/local/sbin/maverick-sync-host-apps
+```
+
+to refresh the Caja application view.
 
 Full labeling policy: [`HOST-APP-LABELING.md`](HOST-APP-LABELING.md).
 
@@ -406,6 +479,7 @@ The reference machine has been tested with:
 - automatic host-app mirroring
 - automatic `(Host)` labels in the MATE menu
 - automatic `(Host)` labels in host Caja `Open With`/file-context menus
+- simultaneous Debian-host and Xenial-native MIME handlers in host Caja, confirmed with GDebi for `.deb` files
 - host/native duplicate application coexistence
 - XSMP/ICE graceful logout for capable host apps
 - cgroup fallback cleanup for remaining host apps
