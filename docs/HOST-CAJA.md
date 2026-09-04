@@ -79,7 +79,7 @@ It is maintained by the existing synchronizer:
 
 No additional daemon, watcher, or synchronizer was added.
 
-For this Caja-specific view, each Debian launcher keeps:
+For Debian entries in this Caja-specific view, each launcher keeps:
 
 ```text
 original desktop-file ID
@@ -105,15 +105,154 @@ Xenial menu mirror
   Exec=       -> host-run wrapper
   Name=       -> append (Host)
 
-Host Caja XDG view
+Host Caja Debian view
   desktop ID  -> original Debian ID
   Exec=       -> original direct host command
   Name=       -> append (Host)
 ```
 
-Keeping the original desktop IDs in the Caja view preserves Debian MIME/default-application behavior, while keeping the original `Exec=` avoids routing a host Caja action back through the Xenial bridge unnecessarily.
+Keeping the original Debian desktop IDs in the Caja view preserves Debian MIME/default-application behavior, while keeping the original `Exec=` avoids routing a host Caja action back through the Xenial bridge unnecessarily.
 
-The synchronizer also removes stale Caja-overlay entries when their real Debian launchers disappear and runs `update-desktop-database` on the private application directory when available.
+The synchronizer also removes stale generated entries and runs `update-desktop-database` on the private application directory when available.
+
+## Xenial-native MIME handlers in host Caja
+
+A second issue appeared after the private Caja view was introduced: host Caja could see Debian MIME handlers but no longer offered Xenial-native handlers in `Open With`, even though both applications still appeared in the MATE panel menus.
+
+The confirmed example was GDebi. Both Debian and Xenial provide the same desktop ID and MIME type:
+
+```text
+gdebi.desktop
+MimeType=application/vnd.debian.binary-package;
+```
+
+The accepted generic fix is for the **same existing synchronizer** to add Xenial-native application entries to the private Caja view as well.
+
+Xenial entries use unique `xenial-` desktop IDs so they can coexist with the Debian entry:
+
+```text
+gdebi.desktop
+  Name=GDebi Package Installer (Host)
+  Exec=gdebi-gtk %f
+
+xenial-gdebi.desktop
+  Name=GDebi Package Installer
+  Exec=/usr/local/bin/xenial-run gdebi-gtk %f
+```
+
+Both entries retain their original MIME declaration, so host Caja can offer both choices for a `.deb` file.
+
+Policy for Xenial entries in the Caja view:
+
+```text
+desktop ID           -> prefix with xenial-
+main/localized Name  -> preserve Xenial name; no (Host) suffix
+Exec=                -> wrap with /usr/local/bin/xenial-run
+TryExec=             -> remove
+DBusActivatable=     -> force false when present
+MimeType=            -> preserve
+Categories/metadata  -> preserve
+```
+
+This is generic for MIME-capable Xenial applications; it is not a GDebi-specific rule.
+
+### `xenial-run`
+
+`/usr/local/bin/xenial-run` launches a command inside the **already-running Xenial MATE schroot session** rather than creating a separate unrelated schroot session.
+
+It finds the live Xenial `mate-panel` owned by the current user, verifies that its root is an active `/run/schroot/mount/xenial-*` session, imports that process's graphical/session environment, and then uses `schroot --run-session`.
+
+Accepted helper:
+
+```python
+#!/usr/bin/python3
+
+import os
+import sys
+from pathlib import Path
+
+if len(sys.argv) < 2:
+    print("usage: xenial-run COMMAND [ARG ...]", file=sys.stderr)
+    sys.exit(2)
+
+uid = os.getuid()
+panel_pid = None
+
+for proc in Path("/proc").iterdir():
+    if not proc.name.isdigit():
+        continue
+
+    try:
+        if proc.stat().st_uid != uid:
+            continue
+
+        comm = (proc / "comm").read_text().strip()
+        if comm != "mate-panel":
+            continue
+
+        root = os.readlink(proc / "root")
+        if root.startswith("/run/schroot/mount/xenial-"):
+            panel_pid = proc.name
+            session = Path(root).name
+            break
+    except (OSError, PermissionError):
+        continue
+
+if panel_pid is None:
+    print("xenial-run: active Xenial MATE session not found",
+          file=sys.stderr)
+    sys.exit(1)
+
+raw = Path(f"/proc/{panel_pid}/environ").read_bytes()
+session_env = {}
+
+for item in raw.split(b"\0"):
+    if not item or b"=" not in item:
+        continue
+
+    key, value = item.split(b"=", 1)
+    session_env[
+        key.decode("utf-8", "surrogateescape")
+    ] = value.decode("utf-8", "surrogateescape")
+
+os.environ.clear()
+os.environ.update(session_env)
+
+os.execv(
+    "/usr/bin/schroot",
+    [
+        "/usr/bin/schroot",
+        "--run-session",
+        "-c", session,
+        "--preserve-environment",
+        "--directory=" + os.environ["HOME"],
+        "--",
+        *sys.argv[1:],
+    ],
+)
+```
+
+Install it as executable:
+
+```bash
+sudo chmod 755 /usr/local/bin/xenial-run
+```
+
+The live Xenial session environment was confirmed to provide the required values, including:
+
+```text
+DISPLAY=:0
+XAUTHORITY=$HOME/.Xauthority
+DBUS_SESSION_BUS_ADDRESS=<Xenial session bus>
+PULSE_SERVER=unix:/run/user/$UID/pulse/native
+XDG_RUNTIME_DIR=/run/user/$UID
+SESSION_MANAGER=<Xenial MATE session manager>
+ICEAUTHORITY=$HOME/.ICEauthority
+```
+
+A manual launch through the active `schroot --run-session` path successfully opened Xenial GDebi. After the generated dual application view was installed and Caja was restarted, both GDebi choices were visible again in `Open With`.
+
+No new background service or watcher was added for this feature. The existing synchronizer scans the Xenial application directories when it runs. If Xenial application launchers are later added or removed independently of a Debian launcher change, rerun `/usr/local/sbin/maverick-sync-host-apps` to refresh the Caja view.
 
 ## Xenial Caja wrapper
 
@@ -184,6 +323,7 @@ Confirmed working:
 - normal logout/login
 - `Open With` and file-context application menus
 - `(Host)` labels in host Caja application-choice menus
+- simultaneous visibility of Debian-host and Xenial-native MIME handlers, confirmed with GDebi for `.deb` files
 
 ## GVfs coexistence
 
@@ -196,4 +336,4 @@ Do not remove or disable the Xenial GVfs stack merely because Debian Caja now ow
 
 ## Design rationale
 
-This moves the primary file-management surface to the maintained Debian host without replacing the Xenial MATE shell. The private Caja XDG view also keeps application-origin labeling consistent without modifying Debian's real `.desktop` files or adding another background component.
+This moves the primary file-management surface to the maintained Debian host without replacing the Xenial MATE shell. The private Caja XDG view keeps application-origin labeling consistent while also preserving access to Xenial-native MIME handlers, without modifying Debian's real `.desktop` files or adding another background component.
