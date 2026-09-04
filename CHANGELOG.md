@@ -18,3 +18,4 @@ Accepted project changes are recorded here after they are tested and approved.
 - Confirmed Discord works when installed on the Debian host and exposed through the bridge rather than installed inside Xenial.
 - Added and tested generic `(Host)` suffixing for all mirrored Debian application names, including localized `Name[...]` entries while leaving desktop-action labels unchanged.
 - Confirmed the existing host-app synchronizer/path watcher applies `(Host)` automatically to both current and future mirrored applications with no additional service or daemon.
+- Completed a performance baseline on the reference iMac18,1: hardware acceleration is active on both Debian and Xenial, idle desktop overhead is negligible, CPU scaling reaches ~3.6 GHz under load, and a one-minute full-load test ended at 50 C without observed throttling. No performance-specific tuning changes were required.
