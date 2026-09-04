@@ -102,7 +102,7 @@ Name[de]=Beispiel (Host)
 
 This keeps the execution-side indicator visible regardless of which translated application name MATE chooses.
 
-## Automatic handling of future applications
+## Automatic handling of future host applications
 
 The existing systemd path watcher already runs the synchronizer when Debian application launchers change:
 
@@ -140,7 +140,7 @@ The real Debian `.desktop` files are intentionally **not** renamed. Instead, the
 /var/lib/maverick-host-apps/caja-xdg/applications
 ```
 
-That view differs from the Xenial menu mirror:
+For Debian applications, that view differs from the Xenial menu mirror:
 
 ```text
 Xenial menu view
@@ -148,7 +148,7 @@ Xenial menu view
   Exec=               -> host-run wrapper
   Name=/Name[locale]  -> append (Host)
 
-Host Caja view
+Host Caja Debian view
   desktop IDs         -> original Debian IDs
   Exec=               -> original direct host command
   Name=/Name[locale]  -> append (Host)
@@ -164,7 +164,43 @@ XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share
 
 This environment is scoped to Caja; Debian's normal application database remains untouched.
 
-The same existing synchronizer/path watcher maintains both generated views, so future Debian applications automatically receive `(Host)` labels in both the Xenial menu and host Caja's `Open With` menus.
+## Xenial-native handlers in host Caja
+
+The Caja-only view must contain more than Debian applications. Otherwise host Caja loses Xenial-native MIME handlers even though those applications still appear normally in the MATE panel menus.
+
+The confirmed example was `.deb` handling. Debian and Xenial both provide:
+
+```text
+gdebi.desktop
+MimeType=application/vnd.debian.binary-package;
+```
+
+To let both coexist in host Caja, the same synchronizer now adds Xenial entries with unique `xenial-` desktop IDs:
+
+```text
+Debian:
+  gdebi.desktop
+  Name=GDebi Package Installer (Host)
+  Exec=gdebi-gtk %f
+
+Xenial:
+  xenial-gdebi.desktop
+  Name=GDebi Package Installer
+  Exec=/usr/local/bin/xenial-run gdebi-gtk %f
+```
+
+The Xenial entry keeps its original MIME declarations and visible name, but `Exec=` is routed through `/usr/local/bin/xenial-run` into the already-running Xenial MATE schroot session.
+
+This preserves the origin convention consistently:
+
+```text
+Debian-host application  -> name carries (Host)
+Xenial-native application -> original name, no suffix
+```
+
+and restores simultaneous host/native choices in Caja's `Open With` menus without modifying either distribution's real `.desktop` files.
+
+The existing synchronizer scans Xenial application directories whenever it runs. No new watcher was added; if Xenial application launchers change independently, rerun `/usr/local/sbin/maverick-sync-host-apps` to refresh the Caja view.
 
 ## Current launcher policy
 
@@ -183,13 +219,21 @@ Xenial menu mirror:
   Hidden=true          -> preserve
   Categories           -> preserve
 
-Host Caja XDG view:
+Host Caja Debian entries:
   desktop ID           -> preserve original ID
   main Name=           -> append " (Host)"
   localized Name[]=    -> append " (Host)"
   desktop-action Name= -> preserve
   Exec=                -> preserve original host command
   MIME/default-app IDs -> preserve
+
+Host Caja Xenial entries:
+  desktop ID           -> prefix filename with xenial-
+  main/localized Name  -> preserve
+  Exec=                -> wrap with xenial-run
+  TryExec=             -> remove
+  DBusActivatable=     -> force false when present
+  MimeType=            -> preserve
 ```
 
-This behavior was tested successfully on the reference system on 2026-09-04.
+The host-label view and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.
