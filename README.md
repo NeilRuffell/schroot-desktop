@@ -53,6 +53,7 @@ The reference system is working with:
 - XSMP/ICE integration so compliant host applications close normally during MATE logout
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
 - current applications such as Discord installed on Debian and launched from the Xenial desktop
+- verified hardware acceleration on both Debian and Xenial with negligible idle desktop overhead
 
 ## Documentation
 
@@ -63,6 +64,10 @@ The current architecture/build handoff is in:
 Host application labeling behavior is documented in:
 
 - [`docs/HOST-APP-LABELING.md`](docs/HOST-APP-LABELING.md)
+
+The tested performance baseline is documented in:
+
+- [`docs/PERFORMANCE-BASELINE.md`](docs/PERFORMANCE-BASELINE.md)
 
 The handoff is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
 
