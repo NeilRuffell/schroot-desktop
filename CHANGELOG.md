@@ -19,3 +19,8 @@ Accepted project changes are recorded here after they are tested and approved.
 - Added and tested generic `(Host)` suffixing for all mirrored Debian application names, including localized `Name[...]` entries while leaving desktop-action labels unchanged.
 - Confirmed the existing host-app synchronizer/path watcher applies `(Host)` automatically to both current and future mirrored applications with no additional service or daemon.
 - Completed a performance baseline on the reference iMac18,1: hardware acceleration is active on both Debian and Xenial, idle desktop overhead is negligible, CPU scaling reaches ~3.6 GHz under load, and a one-minute full-load test ended at 50 C without observed throttling. No performance-specific tuning changes were required.
+- Moved primary Caja file management and desktop ownership from Xenial Caja 1.12 to Debian Caja 1.26 through the existing `host-run` bridge.
+- Added `/srv/xenial/usr/local/bin/caja` as a generic wrapper to route normal Xenial Caja invocations to Debian `/usr/bin/caja` while keeping Xenial `/usr/bin/caja` available as a rollback path.
+- Removed `filemanager` from MATE's required-component list and started Debian Caja in the Desktop autostart phase with `--force-desktop --no-default-window`, avoiding misuse of the fire-and-forget `host-run` client as a required MATE component.
+- Confirmed Debian Caja desktop ownership via `/proc` (`exe: /usr/bin/caja`, `root: /`) and tested desktop icons, desktop right-click, Home/Computer/Trash, Places, folder launching, additional Caja windows, USB insertion/eject, and normal logout/login.
+- Retained Xenial GVfs for Xenial-native applications while Debian Caja uses the Debian GVfs stack; both stacks are intentionally allowed to coexist.
