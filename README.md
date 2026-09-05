@@ -103,6 +103,11 @@ The tested performance baseline is documented in:
 
 - [`docs/PERFORMANCE-BASELINE.md`](docs/PERFORMANCE-BASELINE.md)
 
+The guarded audit and offline recovery procedure for orphaned schroot sessions
+is documented in:
+
+- [`docs/SCHROOT-SESSION-CLEANUP.md`](docs/SCHROOT-SESSION-CLEANUP.md)
+
 The handoff is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
 
 ## Design rules

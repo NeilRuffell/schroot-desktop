@@ -1,0 +1,324 @@
+#!/usr/bin/python3
+"""Audit and safely retire orphaned Schroot Desktop sessions."""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import datetime as dt
+import os
+from pathlib import Path
+import pwd
+import shutil
+import stat as stat_module
+import subprocess
+import sys
+import tempfile
+
+
+SESSION_DIRECTORY = Path("/var/lib/schroot/session")
+MOUNTINFO = Path("/proc/self/mountinfo")
+PROFILE_FILES = (
+    Path("/etc/schroot/xenial-desktop/fstab"),
+    Path("/etc/schroot/xenial-unity-desktop/fstab"),
+)
+MANAGED_CHROOTS = {"xenial", "xenial-unity"}
+
+
+class MaintenanceError(RuntimeError):
+    pass
+
+
+def canonical_mount_path(value: str) -> str:
+    if not value:
+        return ""
+    if value == "/var/run":
+        return "/run"
+    if value.startswith("/var/run/"):
+        return "/run/" + value[len("/var/run/") :]
+    return value.rstrip("/") or "/"
+
+
+def read_session(path: Path) -> dict[str, str]:
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with path.open(encoding="utf-8") as stream:
+            parser.read_file(stream)
+    except (OSError, configparser.Error) as exc:
+        raise MaintenanceError(f"cannot read session record {path}: {exc}") from exc
+
+    if len(parser.sections()) != 1:
+        raise MaintenanceError(f"unexpected session record format: {path}")
+    return dict(parser[parser.sections()[0]])
+
+
+def process_roots() -> dict[str, list[int]]:
+    roots: dict[str, list[int]] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            root = os.readlink(entry / "root")
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            continue
+        roots.setdefault(canonical_mount_path(root), []).append(int(entry.name))
+    return roots
+
+
+def mounted_targets() -> list[str]:
+    targets: list[str] = []
+    try:
+        lines = MOUNTINFO.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise MaintenanceError(f"cannot read {MOUNTINFO}: {exc}") from exc
+
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 5:
+            targets.append(canonical_mount_path(fields[4]))
+    return targets
+
+
+def path_is_within(candidate: str, parent: str) -> bool:
+    return candidate == parent or candidate.startswith(parent + "/")
+
+
+def collect_sessions() -> list[dict[str, object]]:
+    if not SESSION_DIRECTORY.is_dir():
+        return []
+
+    roots = process_roots()
+    targets = mounted_targets()
+    sessions: list[dict[str, object]] = []
+
+    for path in sorted(SESSION_DIRECTORY.iterdir()):
+        if not path.is_file():
+            continue
+        data = read_session(path)
+        mount_path = canonical_mount_path(data.get("mount-location", ""))
+        if not mount_path:
+            raise MaintenanceError(f"session record has no mount-location: {path}")
+
+        pids = sorted(
+            pid
+            for root, root_pids in roots.items()
+            if path_is_within(root, mount_path)
+            for pid in root_pids
+        )
+        mount_count = sum(path_is_within(target, mount_path) for target in targets)
+        sessions.append(
+            {
+                "id": path.name,
+                "original_name": data.get("original-name", ""),
+                "mount_path": mount_path,
+                "pids": pids,
+                "mount_count": mount_count,
+            }
+        )
+    return sessions
+
+
+def print_audit(sessions: list[dict[str, object]]) -> int:
+    print("Schroot Desktop session audit")
+    if os.geteuid() != 0:
+        print("WARNING: run with sudo for authoritative process visibility")
+
+    if not sessions:
+        print("No schroot session records found.")
+        return 0
+
+    active = 0
+    orphaned = 0
+    for session in sessions:
+        pids = session["pids"]
+        mounts = session["mount_count"]
+        if pids:
+            state = "ACTIVE"
+            active += 1
+        else:
+            state = "ORPHAN"
+            orphaned += 1
+        print(
+            f"{state:6} {session['id']} "
+            f"chroot={session['original_name'] or '?'} "
+            f"processes={len(pids)} mounts={mounts}"
+        )
+
+    print(f"Summary: total={len(sessions)} active={active} orphaned={orphaned}")
+    return orphaned
+
+
+def lightdm_is_active() -> bool:
+    result = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "lightdm.service"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def target_identity(name: str | None) -> tuple[str, int]:
+    target = name or os.environ.get("SUDO_USER")
+    if not target or target == "root":
+        raise MaintenanceError("specify the desktop account with --target-user")
+    try:
+        record = pwd.getpwnam(target)
+    except KeyError as exc:
+        raise MaintenanceError(f"unknown target user: {target}") from exc
+    if record.pw_uid == 0:
+        raise MaintenanceError("the target user must not be root")
+    return target, record.pw_uid
+
+
+def corrected_profile(content: str, uid: int, path: Path) -> tuple[str, bool]:
+    replacement = f"/run/user/{uid} /run/user/{uid} none rw,bind 0 0"
+    output: list[str] = []
+    found_old = False
+    found_new = False
+
+    for original_line in content.splitlines(keepends=True):
+        newline = "\n" if original_line.endswith("\n") else ""
+        line = original_line.rstrip("\r\n")
+        fields = line.split()
+        if len(fields) >= 4 and fields[0] == "/run/user" and fields[1] == "/run/user":
+            if "rbind" not in fields[3].split(","):
+                raise MaintenanceError(
+                    f"refusing unexpected /run/user rule in {path}: {line}"
+                )
+            output.append(replacement + newline)
+            found_old = True
+            continue
+        if len(fields) >= 2 and fields[0] == f"/run/user/{uid}" and fields[1] == f"/run/user/{uid}":
+            found_new = True
+        output.append(original_line)
+
+    if not found_old and not found_new:
+        raise MaintenanceError(f"expected /run/user mount rule not found in {path}")
+    return "".join(output), found_old
+
+
+def atomic_write(path: Path, content: str) -> None:
+    stat = path.stat()
+    fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, stat_module.S_IMODE(stat.st_mode))
+        os.chown(temporary, stat.st_uid, stat.st_gid)
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def repair(args: argparse.Namespace) -> int:
+    if not args.apply:
+        raise MaintenanceError("repair is disabled unless --apply is supplied")
+    if os.geteuid() != 0:
+        raise MaintenanceError("repair must be run as root")
+    if lightdm_is_active():
+        raise MaintenanceError(
+            "LightDM is active; switch to a TTY or SSH session and run "
+            "'sudo systemctl stop lightdm' first"
+        )
+
+    user, uid = target_identity(args.target_user)
+    sessions = collect_sessions()
+    managed = [s for s in sessions if s["original_name"] in MANAGED_CHROOTS]
+    active = [s for s in managed if s["pids"]]
+    if active:
+        names = ", ".join(str(s["id"]) for s in active)
+        raise MaintenanceError(f"managed sessions still contain processes: {names}")
+
+    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_root = Path("/var/backups/schroot-desktop") / timestamp
+    changes: list[tuple[Path, str]] = []
+    for profile in PROFILE_FILES:
+        try:
+            content = profile.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise MaintenanceError(f"cannot read {profile}: {exc}") from exc
+        updated, changed = corrected_profile(content, uid, profile)
+        if changed:
+            changes.append((profile, updated))
+
+    if changes:
+        for profile, updated in changes:
+            backup = backup_root / profile.relative_to("/")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(profile, backup)
+            atomic_write(profile, updated)
+            print(f"Updated {profile}; backup: {backup}")
+    else:
+        print(f"Runtime mount profiles already use the non-recursive UID {uid} bind.")
+
+    failures: list[str] = []
+    for session in managed:
+        session_id = str(session["id"])
+        print(f"Ending orphan session {session_id}...")
+        result = subprocess.run(
+            ["schroot", "--end-session", "--chroot", f"session:{session_id}"],
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(session_id)
+
+    remaining = [
+        s for s in collect_sessions() if s["original_name"] in MANAGED_CHROOTS
+    ]
+    if failures or remaining:
+        details = ", ".join(failures or [str(s["id"]) for s in remaining])
+        raise MaintenanceError(
+            "normal schroot teardown did not clean every session; no forced "
+            f"unmount or record deletion was attempted. Remaining: {details}"
+        )
+
+    print(
+        f"Repair complete for {user} (UID {uid}). Start LightDM and test one "
+        "login/logout cycle before rebooting."
+    )
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Audit or repair Schroot Desktop session state"
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    audit_parser = subparsers.add_parser("audit", help="read-only session audit")
+    audit_parser.add_argument(
+        "--strict", action="store_true", help="return nonzero when orphans exist"
+    )
+
+    repair_parser = subparsers.add_parser(
+        "repair", help="offline guarded repair for orphaned sessions"
+    )
+    repair_parser.add_argument("--apply", action="store_true", help="perform the repair")
+    repair_parser.add_argument("--target-user", help="desktop account owning the sessions")
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        if args.command in (None, "audit"):
+            orphaned = print_audit(collect_sessions())
+            return 1 if getattr(args, "strict", False) and orphaned else 0
+        if args.command == "repair":
+            return repair(args)
+        raise MaintenanceError(f"unknown command: {args.command}")
+    except MaintenanceError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
