@@ -14,6 +14,7 @@ The current reference build uses:
 - **Nautilus 3.14/3.18-era Xenial stack** for the Unity desktop/file manager
 - Debian-owned kernel, graphics, networking, PipeWire, UDisks2, PolicyKit and current applications
 - a `host-run` bridge so modern Debian applications appear in the Xenial desktops and execute with Debian libraries
+- a generic Unity Host menu/HUD protocol bridge for supported Debian applications
 
 ## Why
 
@@ -68,6 +69,7 @@ The reference system is working with:
 - `(Host)` suffixes also preserved in Debian Caja `Open With` and file-context application menus through a private Caja XDG application view
 - simultaneous Debian-host and Xenial-native MIME handlers in host Caja, with Xenial entries launched back into the existing Xenial MATE session through `xenial-run`
 - coexistence of Xenial-native and Debian-host versions of the same application
+- generic Unity global-menu/HUD integration for Host applications that expose supported GMenu/GAction or DBusMenu interfaces, with no per-app whitelist or focus-switch workaround
 - XSMP/ICE integration for the established MATE host-app path
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
 - current applications such as Discord installed on Debian and launched from Xenial
@@ -82,6 +84,10 @@ The current architecture/build handoff is in:
 The tested parallel Xenial Unity build is documented in:
 
 - [`docs/XENIAL-UNITY.md`](docs/XENIAL-UNITY.md)
+
+The accepted Unity Host global-menu/HUD protocol bridge is documented in:
+
+- [`docs/UNITY-HOST-MENU-HUD.md`](docs/UNITY-HOST-MENU-HUD.md)
 
 Host Caja desktop integration, including its private XDG application view and Xenial MIME-handler bridge, is documented in:
 
@@ -111,6 +117,7 @@ The handoff is the canonical technical checkpoint and is updated only after a tr
 10. Debian's real `.desktop` files remain untouched; generated XDG views are used where desktop-specific labeling or MIME integration is required.
 11. Keep the host launcher session-scoped rather than permanently enabled.
 12. Treat package presence inside a Xenial root separately from runtime service ownership; Debian remains responsible for modern hardware-facing daemons.
+13. In Unity, bridge supported menu protocols generically rather than adding per-app global-menu or HUD fixes.
 
 ## Security note
 
