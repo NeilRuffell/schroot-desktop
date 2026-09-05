@@ -1,6 +1,6 @@
 # Host application labeling
 
-Schroot Desktop exposes modern Debian applications inside the Xenial MATE menu through the existing host-application mirror and `host-run` bridge.
+Schroot Desktop exposes modern Debian applications inside the Xenial desktop menus/Dash through the existing host-application mirror and `host-run` bridge.
 
 To make it immediately obvious which side an application belongs to, every mirrored Debian application is visibly suffixed with:
 
@@ -41,7 +41,7 @@ rewrites Debian `.desktop` files before placing them below:
 
 For the Xenial menu view, the synchronizer appends ` (Host)` to the main application `Name=` and localized `Name[...]` keys in the `[Desktop Entry]` section.
 
-The relevant logic is:
+The relevant base rewrite is:
 
 ```python
 output = []
@@ -77,7 +77,7 @@ for line in lines:
 
 The suffix check makes the rewrite idempotent: rerunning the synchronizer does not produce repeated labels such as `(Host) (Host)`.
 
-## Desktop actions are deliberately excluded
+## Desktop actions are deliberately excluded from renaming
 
 Only names in the main `[Desktop Entry]` section are changed.
 
@@ -100,7 +100,7 @@ Name[fr]=Exemple (Host)
 Name[de]=Beispiel (Host)
 ```
 
-This keeps the execution-side indicator visible regardless of which translated application name MATE chooses.
+This keeps the execution-side indicator visible regardless of which translated application name the desktop chooses.
 
 ## Automatic handling of future host applications
 
@@ -110,7 +110,7 @@ The existing systemd path watcher already runs the synchronizer when Debian appl
 /etc/systemd/system/maverick-host-app-sync.path
 ```
 
-Therefore the flow for newly installed host applications is:
+Therefore the normal flow for newly installed host applications is:
 
 ```text
 install current application on Debian
@@ -125,16 +125,85 @@ main display name receives (Host)
         ↓
 Exec= is wrapped with host-run
         ↓
-application appears in Xenial MATE menu
+Unity/BAMF matching metadata is handled generically
+        ↓
+application appears in the Xenial desktop
 ```
 
-No additional runtime component was introduced for this feature.
+No additional runtime daemon or watcher is required.
+
+## Unity launcher / BAMF matching
+
+Unity uses BAMF to associate a running application window with the `.desktop` launcher that started it. The project intentionally changes mirrored Debian desktop IDs to unique `debian-*` IDs so host and Xenial-native launchers can coexist.
+
+Testing showed two classes of host launchers:
+
+```text
+source has StartupWMClass
+    -> existing BAMF matching works
+
+source lacks StartupWMClass
+    -> the debian-* desktop ID can no longer be inferred reliably
+    -> Unity may show a temporary launcher icon plus a second running-app icon
+```
+
+Confirmed working examples with native matching metadata were:
+
+```text
+Firefox ESR:
+  StartupWMClass=firefox-esr
+  WM_CLASS second value=firefox-esr
+
+Synaptic:
+  StartupWMClass=synaptic
+  WM_CLASS second value=Synaptic
+```
+
+Deskflow provided the confirmed no-`StartupWMClass` case:
+
+```text
+WM_CLASS="deskflow", "Deskflow"
+_GTK_APPLICATION_ID=org.deskflow.deskflow
+mirrored ID=debian-org.deskflow.deskflow.desktop
+```
+
+The accepted generic fix is **not** to synthesize per-application `StartupWMClass` values. Instead, the synchronizer preserves source `StartupWMClass` metadata when present and, only when it is absent, adds BAMF's desktop-file ownership hint to the mirrored launch command:
+
+```text
+BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
+```
+
+For example:
+
+```ini
+Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop /usr/local/bin/host-run deskflow
+```
+
+The path is intentionally the path visible inside the Xenial desktop session, where BAMF runs.
+
+The `host-run` client and Debian host launcher both use environment allow-lists. `BAMF_DESKTOP_FILE_HINT` must therefore be forwarded by all of these generic bridge components:
+
+```text
+/srv/xenial/usr/local/bin/host-run
+/srv/xenial-unity/usr/local/bin/host-run
+/usr/local/libexec/maverick-host-launcher
+```
+
+The forwarded value was confirmed in the real Debian Deskflow process environment:
+
+```text
+BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop
+```
+
+After this generic rule was applied, the previously affected host applications tested in Unity associated with a single launcher icon instead of creating duplicate/transient launcher entries. Existing applications with valid `StartupWMClass`, including Firefox ESR and Synaptic, remain on their original matching path.
+
+Do not add application-specific `StartupWMClass` tables or per-app launcher fixes for this problem. Future mirrored host applications inherit the conditional BAMF rule automatically through the existing synchronizer.
 
 ## Host Caja `Open With` and file-context menus
 
 Once Debian Caja became the primary file manager and desktop owner, its `Open With` menus no longer read the Xenial `debian-*` mirror. Caja is a Debian process, so without an override it reads the host's normal application database and shows unmodified names such as `Firefox ESR` or `Discord`.
 
-The real Debian `.desktop` files are intentionally **not** renamed. Instead, the same synchronizer now also maintains a private host-Caja XDG application view:
+The real Debian `.desktop` files are intentionally **not** renamed. Instead, the same synchronizer also maintains a private host-Caja XDG application view:
 
 ```text
 /var/lib/maverick-host-apps/caja-xdg/applications
@@ -175,7 +244,7 @@ gdebi.desktop
 MimeType=application/vnd.debian.binary-package;
 ```
 
-To let both coexist in host Caja, the same synchronizer now adds Xenial entries with unique `xenial-` desktop IDs:
+To let both coexist in host Caja, the same synchronizer adds Xenial entries with unique `xenial-` desktop IDs:
 
 ```text
 Debian:
@@ -205,12 +274,14 @@ The existing synchronizer scans Xenial application directories whenever it runs.
 ## Current launcher policy
 
 ```text
-Xenial menu mirror:
+Xenial desktop mirror:
   desktop ID           -> prefix filename with debian-
   main Name=           -> append " (Host)"
   localized Name[]=    -> append " (Host)"
   desktop-action Name= -> preserve
   Exec=                -> wrap with host-run
+  StartupWMClass       -> preserve when supplied by source
+  if no StartupWMClass -> prepend BAMF_DESKTOP_FILE_HINT for the debian-* file
   TryExec=             -> remove
   DBusActivatable=     -> force false
   OnlyShowIn=          -> remove
@@ -218,6 +289,9 @@ Xenial menu mirror:
   NoDisplay=true       -> preserve
   Hidden=true          -> preserve
   Categories           -> preserve
+
+Host-run environment bridge:
+  BAMF_DESKTOP_FILE_HINT -> forward when present
 
 Host Caja Debian entries:
   desktop ID           -> preserve original ID
@@ -236,4 +310,4 @@ Host Caja Xenial entries:
   MimeType=            -> preserve
 ```
 
-The host-label view and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.
+The host-label view, Unity/BAMF launcher matching, and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.
