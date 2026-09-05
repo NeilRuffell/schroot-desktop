@@ -313,6 +313,38 @@ ImportError: No module named json
 
 After installing `python`, a direct bridge test returned success and Debian GUI applications launched normally from the Unity session.
 
+## Unity/BAMF launcher matching
+
+Unity uses BAMF to associate running application windows with their launchers. Mirrored host applications intentionally use unique `debian-*` desktop IDs, so the source desktop ID is not preserved.
+
+Testing established this generic rule:
+
+```text
+source launcher has StartupWMClass
+    -> preserve it; normal BAMF matching works
+
+source launcher lacks StartupWMClass
+    -> prepend BAMF_DESKTOP_FILE_HINT for the mirrored debian-* desktop file
+```
+
+For the no-`StartupWMClass` case, the generated command uses the path visible inside Xenial:
+
+```text
+BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
+```
+
+Example:
+
+```ini
+Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop /usr/local/bin/host-run deskflow
+```
+
+Both Xenial `host-run` clients and `/usr/local/libexec/maverick-host-launcher` must include `BAMF_DESKTOP_FILE_HINT` in their environment allow-lists so the value reaches the real Debian process.
+
+The test case confirmed the value in the host process environment and eliminated the duplicate/transient Unity launcher behavior for previously affected host applications. Firefox ESR and Synaptic, which already supply `StartupWMClass`, remain unchanged and continue to match through their native metadata.
+
+Do not build per-application `StartupWMClass` tables or launcher hacks. This is a conditional rule in the existing generic synchronizer and is inherited automatically by future mirrored host apps.
+
 The existing `maverick-host-launcher.service` remains session-scoped and is started/stopped by the Unity wrapper. Do not permanently enable it.
 
 ---
@@ -364,6 +396,7 @@ The accepted Unity milestone has been tested with:
 - populated Unity application/search lenses
 - host application discovery through `/host-xdg`
 - Debian host applications launching through the existing `host-run` bridge
+- correct single-icon Unity launcher association for mirrored host applications, including the generic BAMF hint path for source launchers without `StartupWMClass`
 - USB/removable media through Xenial GVfs + Debian UDisks2
 - fixed internal volume authentication through Debian polkitd + Debian graphical polkit-mate agent
 - mounted fixed volumes visible and browsable in Nautilus
@@ -381,6 +414,7 @@ The MATE root remains independent and unchanged by the Unity desktop package set
 - Debian owns hardware-facing services and modern applications.
 - Unity owns its classic Xenial shell and native Nautilus/GVfs user experience.
 - Use the existing generic host-application mirror and launcher; do not add Unity-specific per-app hacks.
+- Preserve source `StartupWMClass` when present; use the generic BAMF desktop-file hint only for mirrored host launchers that lack it.
 - Do not force Debian Caja desktop ownership into Unity unless a future demonstrated problem justifies it.
 - Keep the host launcher session-scoped.
 - Do not treat package presence inside Xenial as service ownership.
