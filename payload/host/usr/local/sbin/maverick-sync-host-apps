@@ -1,0 +1,386 @@
+#!/usr/bin/python3
+
+from pathlib import Path
+
+HOST_SOURCES = [
+    Path("/usr/share/applications"),
+    Path("/usr/local/share/applications"),
+]
+
+TARGET = Path("/var/lib/maverick-host-apps/applications")
+TARGET.mkdir(parents=True, exist_ok=True)
+
+
+wanted = set()
+
+
+# ------------------------------------------------------------
+# 1. Mirror every Debian desktop entry.
+# ------------------------------------------------------------
+
+for source in HOST_SOURCES:
+    if not source.exists():
+        continue
+
+    for src in source.rglob("*.desktop"):
+        rel = src.relative_to(source)
+        dst = TARGET / rel.parent / ("debian-" + rel.name)
+        wanted.add(dst)
+
+        try:
+            lines = src.read_text(
+                encoding="utf-8",
+                errors="replace"
+            ).splitlines(True)
+        except Exception:
+            continue
+
+        output = []
+        section = None
+
+        for line in lines:
+            stripped = line.rstrip("\r\n")
+            newline = line[len(stripped):]
+
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped
+
+            if (
+                section == "[Desktop Entry]"
+                and (
+                    stripped.startswith("Name=")
+                    or (
+                        stripped.startswith("Name[")
+                        and "]=" in stripped
+                    )
+                )
+            ):
+                key, value = stripped.split("=", 1)
+                if not value.endswith(" (Host)"):
+                    stripped = f"{key}={value} (Host)"
+
+            elif stripped.startswith("Exec="):
+                stripped = (
+                    "Exec=/usr/local/bin/host-run "
+                    + stripped[5:]
+                )
+
+            elif stripped.startswith("TryExec="):
+                continue
+
+            elif stripped.startswith("DBusActivatable="):
+                stripped = "DBusActivatable=false"
+
+            # Host apps are intentionally available in Maverick
+            # regardless of their original DE restriction.
+            elif stripped.startswith("OnlyShowIn="):
+                continue
+
+            elif stripped.startswith("NotShowIn="):
+                continue
+
+            output.append(stripped + newline)
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp = dst.with_suffix(dst.suffix + ".new")
+
+        tmp.write_text(
+            "".join(output),
+            encoding="utf-8"
+        )
+
+        tmp.chmod(0o644)
+        tmp.replace(dst)
+
+
+# ------------------------------------------------------------
+# 2. Delete obsolete generated mirrors.
+# ------------------------------------------------------------
+
+for old in list(TARGET.rglob("*.desktop")):
+    if old not in wanted:
+        old.unlink()
+
+
+for directory in sorted(
+    [p for p in TARGET.rglob("*") if p.is_dir()],
+    key=lambda p: len(p.parts),
+    reverse=True,
+):
+    try:
+        directory.rmdir()
+    except OSError:
+        pass
+
+
+# ------------------------------------------------------------
+# 3. Build a host-side XDG application view for Debian Caja.
+#
+# Keep original desktop IDs and Exec= commands so MIME/default
+# associations remain native to Debian.  Only visible application
+# names are suffixed with "(Host)".
+# ------------------------------------------------------------
+
+# BEGIN HOST CAJA XDG VIEW
+
+import subprocess
+
+CAJA_XDG_TARGET = Path(
+    "/var/lib/maverick-host-apps/caja-xdg/applications"
+)
+CAJA_XDG_TARGET.mkdir(parents=True, exist_ok=True)
+
+caja_wanted = set()
+
+for source in HOST_SOURCES:
+    if not source.exists():
+        continue
+
+    for src in source.rglob("*.desktop"):
+        rel = src.relative_to(source)
+        dst = CAJA_XDG_TARGET / rel
+        caja_wanted.add(dst)
+
+        try:
+            lines = src.read_text(
+                encoding="utf-8",
+                errors="replace"
+            ).splitlines(True)
+        except Exception:
+            continue
+
+        output = []
+        section = None
+
+        for line in lines:
+            stripped = line.rstrip("\r\n")
+            newline = line[len(stripped):]
+
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped
+
+            if (
+                section == "[Desktop Entry]"
+                and (
+                    stripped.startswith("Name=")
+                    or (
+                        stripped.startswith("Name[")
+                        and "]=" in stripped
+                    )
+                )
+            ):
+                key, value = stripped.split("=", 1)
+
+                if not value.endswith(" (Host)"):
+                    stripped = f"{key}={value} (Host)"
+
+            output.append(stripped + newline)
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp = dst.with_suffix(dst.suffix + ".new")
+        tmp.write_text("".join(output), encoding="utf-8")
+        tmp.chmod(0o644)
+        tmp.replace(dst)
+
+
+# Remove overlay entries whose real Debian desktop files vanished.
+for existing in CAJA_XDG_TARGET.rglob("*.desktop"):
+    if existing not in caja_wanted:
+        existing.unlink()
+
+
+# Refresh MIME/application cache for Caja's private XDG view.
+udb = Path("/usr/bin/update-desktop-database")
+
+if udb.exists():
+    subprocess.run(
+        [str(udb), str(CAJA_XDG_TARGET)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+# END HOST CAJA XDG VIEW
+
+
+# ------------------------------------------------------------
+# 4. Add Xenial-native applications to Debian Caja's private
+#    XDG application view.
+#
+# Original Xenial names are retained.  Desktop IDs are prefixed
+# with xenial- so they coexist with Debian applications.
+# Exec= is routed through xenial-run into the already-running
+# Xenial MATE schroot session.
+# ------------------------------------------------------------
+
+# BEGIN XENIAL CAJA APPLICATION VIEW
+
+XENIAL_CAJA_SOURCES = [
+    Path("/srv/xenial/usr/share/applications"),
+    Path("/srv/xenial/usr/local/share/applications"),
+]
+
+xenial_caja_wanted = set()
+
+for source in XENIAL_CAJA_SOURCES:
+    if not source.exists():
+        continue
+
+    for src in source.rglob("*.desktop"):
+        rel = src.relative_to(source)
+
+        dst = (
+            CAJA_XDG_TARGET
+            / rel.parent
+            / ("xenial-" + rel.name)
+        )
+
+        xenial_caja_wanted.add(dst)
+
+        try:
+            lines = src.read_text(
+                encoding="utf-8",
+                errors="replace"
+            ).splitlines(True)
+        except Exception:
+            continue
+
+        output = []
+
+        for line in lines:
+            stripped = line.rstrip("\r\n")
+            newline = line[len(stripped):]
+
+            if stripped.startswith("Exec="):
+                stripped = (
+                    "Exec=/usr/local/bin/xenial-run "
+                    + stripped[5:]
+                )
+
+            elif stripped.startswith("TryExec="):
+                continue
+
+            elif stripped.startswith("DBusActivatable="):
+                stripped = "DBusActivatable=false"
+
+            output.append(stripped + newline)
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp = dst.with_suffix(dst.suffix + ".new")
+        tmp.write_text("".join(output), encoding="utf-8")
+        tmp.chmod(0o644)
+        tmp.replace(dst)
+
+
+# Remove Xenial entries whose source desktop files disappeared.
+for existing in CAJA_XDG_TARGET.rglob("xenial-*.desktop"):
+    if existing not in xenial_caja_wanted:
+        existing.unlink()
+
+
+# Rebuild after both Debian and Xenial views are complete.
+if udb.exists():
+    subprocess.run(
+        [str(udb), str(CAJA_XDG_TARGET)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+# END XENIAL CAJA APPLICATION VIEW
+
+
+# BEGIN generic BAMF host-app matching
+#
+# Mirrored Debian applications are launched through the asynchronous
+# host-run bridge rather than directly by the desktop environment.
+#
+# Therefore:
+#   - BAMF_DESKTOP_FILE_HINT supplies the authoritative debian-* identity.
+#   - StartupNotify is forced false so Unity does not create a separate
+#     startup-notification launcher identity for the bridge process.
+for desktop in TARGET.rglob("debian-*.desktop"):
+    try:
+        lines = desktop.read_text(
+            encoding="utf-8",
+            errors="replace"
+        ).splitlines(True)
+    except Exception:
+        continue
+
+    rel = desktop.relative_to(TARGET).as_posix()
+    hint = "/host-xdg/applications/" + rel
+
+    # Determine whether the main Desktop Entry already contains
+    # StartupNotify.
+    section = None
+    has_startup_notify = False
+
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+            continue
+
+        if (
+            section == "[Desktop Entry]"
+            and stripped.startswith("StartupNotify=")
+        ):
+            has_startup_notify = True
+            break
+
+    output = []
+    section = None
+
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        newline = line[len(stripped):]
+
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+
+            output.append(stripped + newline)
+
+            if (
+                section == "[Desktop Entry]"
+                and not has_startup_notify
+            ):
+                output.append("StartupNotify=false\n")
+
+            continue
+
+        if (
+            section == "[Desktop Entry]"
+            and stripped.startswith("StartupWMClass=")
+        ):
+            continue
+
+        if (
+            section == "[Desktop Entry]"
+            and stripped.startswith("StartupNotify=")
+        ):
+            stripped = "StartupNotify=false"
+
+        if (
+            stripped.startswith("Exec=")
+            and "BAMF_DESKTOP_FILE_HINT=" not in stripped
+        ):
+            stripped = (
+                "Exec=/usr/bin/env "
+                "BAMF_DESKTOP_FILE_HINT="
+                + hint
+                + " "
+                + stripped[5:]
+            )
+
+        output.append(stripped + newline)
+
+    desktop.write_text(
+        "".join(output),
+        encoding="utf-8"
+    )
+# END generic BAMF host-app matching

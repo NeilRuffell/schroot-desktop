@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Ubuntu Unity 16.04
+Comment=Ubuntu Unity 16.04 Xenial
+Exec=/usr/local/bin/xenial-unity-session
+TryExec=/usr/local/bin/xenial-unity-session
+Type=Application
+DesktopNames=Unity

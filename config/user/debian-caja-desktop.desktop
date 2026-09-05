@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Debian Caja Desktop
+Exec=/usr/local/bin/host-run /usr/bin/env XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share /usr/bin/caja --force-desktop --no-default-window
+OnlyShowIn=MATE;
+X-MATE-Autostart-Phase=Desktop
+NoDisplay=true

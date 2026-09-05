@@ -1,0 +1,5 @@
+#!/bin/sh
+exec /usr/local/bin/host-run \
+  /usr/bin/env \
+  XDG_DATA_DIRS=/var/lib/maverick-host-apps/caja-xdg:/usr/local/share:/usr/share \
+  /usr/bin/caja "$@"

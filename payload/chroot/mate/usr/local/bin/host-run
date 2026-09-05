@@ -1,0 +1,119 @@
+#!/usr/bin/python
+
+from __future__ import print_function
+
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+
+if len(sys.argv) < 2:
+    print("host-run: no command specified", file=sys.stderr)
+    sys.exit(2)
+
+sockpath = "/run/user/%d/maverick-host-launch.sock" % os.getuid()
+
+req = {
+    "argv": sys.argv[1:],
+    "cwd": os.getcwd(),
+    "env": {}
+}
+
+for key in (
+    "DISPLAY",
+    "XAUTHORITY",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "XDG_CURRENT_DESKTOP",
+    "DESKTOP_SESSION",
+    "PULSE_SERVER",
+    "SESSION_MANAGER",
+    "ICEAUTHORITY",
+    "DESKTOP_STARTUP_ID",
+    "BAMF_DESKTOP_FILE_HINT",
+):
+    if key in os.environ:
+        req["env"][key] = os.environ[key]
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sockpath)
+s.sendall(json.dumps(req).encode("utf-8") + "\n")
+
+reply = s.recv(4096)
+s.close()
+
+if not reply.startswith("OK "):
+    print("host-run: %s" % reply.strip(), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    pid = int(reply.strip().split()[1])
+except (IndexError, ValueError):
+    print("host-run: invalid launcher reply: %s" % reply.strip(),
+          file=sys.stderr)
+    sys.exit(1)
+
+hint = os.environ.get("BAMF_DESKTOP_FILE_HINT")
+registration_error = None
+
+try:
+    if hint:
+        devnull = open(os.devnull, "wb")
+        try:
+            # Check ownership without activating bamfdaemon.
+            owner = subprocess.check_output(
+                [
+                    "dbus-send",
+                    "--session",
+                    "--print-reply=literal",
+                    "--reply-timeout=1000",
+                    "--dest=org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus.NameHasOwner",
+                    "string:org.ayatana.bamf",
+                ],
+                stderr=devnull,
+            )
+
+            if "boolean true" in owner:
+                rc = subprocess.call(
+                    [
+                        "dbus-send",
+                        "--session",
+                        "--print-reply=literal",
+                        "--reply-timeout=1000",
+                        "--dest=org.ayatana.bamf",
+                        "/org/ayatana/bamf/control",
+                        "org.ayatana.bamf.control.RegisterApplicationForPid",
+                        "string:" + hint,
+                        "int32:" + str(pid),
+                    ],
+                    stdout=devnull,
+                    stderr=devnull,
+                )
+
+                if rc != 0:
+                    registration_error = (
+                        "BAMF registration returned %d" % rc
+                    )
+
+        except Exception as exc:
+            registration_error = str(exc)
+        finally:
+            devnull.close()
+
+finally:
+    # Never leave a host application stopped because BAMF was unavailable.
+    try:
+        os.kill(pid, signal.SIGCONT)
+    except OSError as exc:
+        print("host-run: failed to continue pid %d: %s" %
+              (pid, exc), file=sys.stderr)
+        sys.exit(1)
+
+if registration_error:
+    print("host-run: BAMF registration warning: %s" %
+          registration_error, file=sys.stderr)

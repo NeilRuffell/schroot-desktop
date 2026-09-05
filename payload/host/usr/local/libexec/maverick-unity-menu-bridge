@@ -1,0 +1,497 @@
+#!/usr/bin/python3
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+
+import gi
+gi.require_version("Gio", "2.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("Dbusmenu", "0.4")
+gi.require_version("DbusmenuGtk3", "0.4")
+from gi.repository import Gio, GLib, Gtk, Dbusmenu, DbusmenuGtk3
+
+REG_NAME = "com.canonical.AppMenu.Registrar"
+REG_PATH = "/com/canonical/AppMenu/Registrar"
+REG_IFACE = REG_NAME
+DBUSMENU_IFACE = "com.canonical.dbusmenu"
+
+REG_XML = """<node><interface name="com.canonical.AppMenu.Registrar">
+<method name="RegisterWindow"><arg type="u" direction="in"/><arg type="o" direction="in"/></method>
+<method name="UnregisterWindow"><arg type="u" direction="in"/></method>
+<method name="GetMenuForWindow"><arg type="u" direction="in"/><arg type="s" direction="out"/><arg type="o" direction="out"/></method>
+<method name="GetMenus"><arg type="a(uso)" direction="out"/></method>
+<signal name="WindowRegistered"><arg type="u"/><arg type="s"/><arg type="o"/></signal>
+<signal name="WindowUnregistered"><arg type="u"/></signal>
+</interface></node>"""
+
+DBUSMENU_XML = """<node><interface name="com.canonical.dbusmenu">
+<property name="Version" type="u" access="read"/><property name="Status" type="s" access="read"/>
+<property name="TextDirection" type="s" access="read"/><property name="IconThemePath" type="as" access="read"/>
+<signal name="ItemsPropertiesUpdated"><arg type="a(ia{sv})"/><arg type="a(ias)"/></signal>
+<signal name="LayoutUpdated"><arg type="u"/><arg type="i"/></signal>
+<signal name="ItemActivationRequested"><arg type="i"/><arg type="u"/></signal>
+<method name="Event"><arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/><arg type="u" direction="in"/></method>
+<method name="EventGroup"><arg type="a(isvu)" direction="in"/><arg type="ai" direction="out"/></method>
+<method name="GetChildren"><arg type="i" direction="in"/><arg type="as" direction="in"/><arg type="a(ia{sv})" direction="out"/></method>
+<method name="GetProperty"><arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="out"/></method>
+<method name="GetProperties"><arg type="i" direction="in"/><arg type="as" direction="in"/><arg type="a{sv}" direction="out"/></method>
+<method name="GetLayout"><arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="as" direction="in"/><arg type="u" direction="out"/><arg type="(ia{sv}av)" direction="out"/></method>
+<method name="GetGroupProperties"><arg type="ai" direction="in"/><arg type="as" direction="in"/><arg type="a(ia{sv})" direction="out"/></method>
+<method name="AboutToShow"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
+<method name="AboutToShowGroup"><arg type="ai" direction="in"/><arg type="ai" direction="out"/><arg type="ai" direction="out"/></method>
+</interface></node>"""
+
+REG_INFO = Gio.DBusNodeInfo.new_for_xml(REG_XML).interfaces[0]
+DBUSMENU_INFO = Gio.DBusNodeInfo.new_for_xml(DBUSMENU_XML).interfaces[0]
+
+GTK_PROPS = (
+    "_GTK_UNIQUE_BUS_NAME",
+    "_GTK_APP_MENU_OBJECT_PATH",
+    "_GTK_MENUBAR_OBJECT_PATH",
+    "_GTK_APPLICATION_OBJECT_PATH",
+    "_GTK_WINDOW_OBJECT_PATH",
+    "_UNITY_OBJECT_PATH",
+    "_GTK_APPLICATION_ID",
+)
+
+def log(message):
+    print("[unity-menu] %s" % message, file=sys.stderr, flush=True)
+
+def explicit_bus(address):
+    flags = (Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
+             Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION)
+    return Gio.DBusConnection.new_for_address_sync(address, flags, None, None)
+
+def prop(text, name):
+    pat = r'^%s(?:\([^\n)]*\))?\s*=\s*"(.*)"$' % re.escape(name)
+    match = re.search(pat, text, re.MULTILINE)
+    return match.group(1) if match else None
+
+class LegacyProxy:
+    def __init__(self, bridge, xid, source, source_path, relay_path):
+        self.bridge = bridge
+        self.xid = xid
+        self.source = source
+        self.source_path = source_path
+        self.relay_path = relay_path
+        self.subs = []
+        self.reg_id = bridge.unity.register_object(
+            relay_path, DBUSMENU_INFO, self._method, self._get_property, None)
+        self.subs.append(bridge.host.signal_subscribe(
+            source, DBUSMENU_IFACE, None, source_path, None,
+            Gio.DBusSignalFlags.NONE, self._signal))
+        self.subs.append(bridge.host.signal_subscribe(
+            source, "org.freedesktop.DBus.Properties", "PropertiesChanged",
+            source_path, DBUSMENU_IFACE, Gio.DBusSignalFlags.NONE, self._signal))
+
+    @property
+    def signature(self):
+        return ("legacy", self.source, self.source_path)
+
+    def _method(self, connection, sender, path, interface, method, params, invocation):
+        if method == "Event":
+            self.bridge.host.call(
+                self.source, self.source_path, DBUSMENU_IFACE, method, params,
+                None, Gio.DBusCallFlags.NONE, -1, None, None, None)
+            invocation.return_value(None)
+            return
+
+        def done(conn, result, inv):
+            try:
+                inv.return_value(conn.call_finish(result))
+            except GLib.Error as exc:
+                inv.return_gerror(exc)
+
+        self.bridge.host.call(
+            self.source, self.source_path, DBUSMENU_IFACE, method, params,
+            None, Gio.DBusCallFlags.NONE, -1, None, done, invocation)
+
+    def _get_property(self, connection, sender, path, interface, name):
+        reply = self.bridge.host.call_sync(
+            self.source, self.source_path, "org.freedesktop.DBus.Properties",
+            "Get", GLib.Variant("(ss)", (DBUSMENU_IFACE, name)),
+            GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 2000, None)
+        return reply.get_child_value(0).get_variant()
+
+    def _signal(self, connection, sender, path, interface, signal_name, params):
+        self.bridge.unity.emit_signal(
+            None, self.relay_path, interface, signal_name, params)
+
+    def close(self):
+        for sid in self.subs:
+            self.bridge.host.signal_unsubscribe(sid)
+        self.subs = []
+        if self.reg_id:
+            self.bridge.unity.unregister_object(self.reg_id)
+            self.reg_id = 0
+
+class GMenuRelay:
+    def __init__(self, bridge, xid, app_id, props, relay_path):
+        self.bridge = bridge
+        self.xid = xid
+        self.app_id = app_id
+        self.props = props
+        self.relay_path = relay_path
+        self.models = []
+        self.actions = []
+        host_name = props["_GTK_UNIQUE_BUS_NAME"]
+
+        combined = Gio.Menu()
+        app_path = props.get("_GTK_APP_MENU_OBJECT_PATH")
+        bar_path = props.get("_GTK_MENUBAR_OBJECT_PATH")
+
+        if app_path:
+            model = Gio.DBusMenuModel.get(bridge.host, host_name, app_path)
+            self.models.append(model)
+            combined.append_submenu(bridge.application_label(app_id, props), model)
+
+        if bar_path:
+            model = Gio.DBusMenuModel.get(bridge.host, host_name, bar_path)
+            self.models.append(model)
+            combined.append_section(None, model)
+
+        self.combined = combined
+        self.widget = Gtk.MenuBar.new_from_model(combined)
+
+        for prefix, key in (
+            ("app", "_GTK_APPLICATION_OBJECT_PATH"),
+            ("win", "_GTK_WINDOW_OBJECT_PATH"),
+            ("unity", "_UNITY_OBJECT_PATH"),
+        ):
+            path = props.get(key)
+            if path:
+                group = Gio.DBusActionGroup.get(bridge.host, host_name, path)
+                self.actions.append(group)
+                self.widget.insert_action_group(prefix, group)
+
+        self.widget.show_all()
+        self.root = DbusmenuGtk3.gtk_parse_menu_structure(self.widget)
+        self.server = Dbusmenu.Server.new(relay_path)
+
+        ready = {"value": False}
+        hid = self.server.connect(
+            "layout-updated", lambda *args: ready.__setitem__("value", True))
+        deadline = time.monotonic() + 2.0
+        context = GLib.MainContext.default()
+        while not ready["value"] and time.monotonic() < deadline:
+            while context.pending():
+                context.iteration(False)
+            time.sleep(0.005)
+        self.server.disconnect(hid)
+        if not ready["value"]:
+            raise RuntimeError("DBusMenu server did not register on Unity bus")
+
+        self.server.set_root(self.root)
+
+    @property
+    def signature(self):
+        p = self.props
+        return ("gmenu", p.get("_GTK_UNIQUE_BUS_NAME"),
+                p.get("_GTK_APP_MENU_OBJECT_PATH"),
+                p.get("_GTK_MENUBAR_OBJECT_PATH"),
+                p.get("_GTK_APPLICATION_OBJECT_PATH"),
+                p.get("_GTK_WINDOW_OBJECT_PATH"),
+                p.get("_UNITY_OBJECT_PATH"))
+
+    def close(self):
+        self.server.set_root(None)
+        self.server = None
+        self.root = None
+        self.widget = None
+        self.combined = None
+        self.actions = []
+        self.models = []
+
+class Bridge:
+    def __init__(self):
+        Gtk.init([])
+        self.unity = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.host = explicit_bus(os.environ["MAVERICK_HOST_BUS_ADDRESS"])
+        self.relays = {}
+        self.known = set()
+        self.host_menus = {}
+        self.pending = {}
+        self.serial = 0
+        self.reg_obj_id = 0
+        self.reg_signal_ids = []
+        self._setup_host_registrar()
+        self._start_x11_watch()
+        self.scan_windows()
+
+    def application_label(self, app_id, props):
+        path = "/var/lib/maverick-host-apps/applications/%s.desktop" % app_id
+        try:
+            in_main = False
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.rstrip("\n")
+                    if line.startswith("["):
+                        in_main = line == "[Desktop Entry]"
+                        continue
+                    if in_main and line.startswith("Name="):
+                        return line[5:]
+        except OSError:
+            pass
+        return props.get("_GTK_APPLICATION_ID") or app_id
+
+    def window_stack(self):
+        reply = self.unity.call_sync(
+            "com.canonical.Unity.WindowStack",
+            "/com/canonical/Unity/WindowStack",
+            "com.canonical.Unity.WindowStack", "GetWindowStack",
+            None, None, Gio.DBusCallFlags.NONE, 1000, None)
+        return {int(e[0]): e[1] for e in reply.unpack()[0]}
+
+    def host_app_id(self, xid):
+        try:
+            app_id = self.window_stack().get(xid)
+        except GLib.Error:
+            return None
+        return app_id if app_id and app_id.startswith("debian-") else None
+
+    def _setup_host_registrar(self):
+        self.reg_obj_id = self.host.register_object(
+            REG_PATH, REG_INFO, self._host_reg_method, None, None)
+        result = self.host.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus",
+            "org.freedesktop.DBus", "RequestName",
+            GLib.Variant("(su)", (REG_NAME, 4)), GLib.VariantType("(u)"),
+            Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+
+        if result in (1, 4):
+            self.own_registrar = True
+            log("host AppMenu registrar acquired")
+            return
+
+        self.own_registrar = False
+        self.host.unregister_object(self.reg_obj_id)
+        self.reg_obj_id = 0
+        log("using existing host AppMenu registrar")
+        self.reg_signal_ids.append(self.host.signal_subscribe(
+            REG_NAME, REG_IFACE, "WindowRegistered", REG_PATH, None,
+            Gio.DBusSignalFlags.NONE, self._existing_reg_signal))
+        self.reg_signal_ids.append(self.host.signal_subscribe(
+            REG_NAME, REG_IFACE, "WindowUnregistered", REG_PATH, None,
+            Gio.DBusSignalFlags.NONE, self._existing_reg_signal))
+        try:
+            reply = self.host.call_sync(
+                REG_NAME, REG_PATH, REG_IFACE, "GetMenus", None,
+                GLib.VariantType("(a(uso))"), Gio.DBusCallFlags.NONE, 1000, None)
+            for xid, service, path in reply.unpack()[0]:
+                self._queue_legacy(int(xid), service, path)
+        except GLib.Error as exc:
+            log("existing registrar seed failed: %s" % exc.message)
+
+    def _host_reg_method(self, conn, sender, obj, iface, method, params, invocation):
+        if method == "RegisterWindow":
+            xid, path = params.unpack()
+            xid = int(xid)
+            self.host_menus[xid] = (sender, path)
+            self.host.emit_signal(
+                None, REG_PATH, REG_IFACE, "WindowRegistered",
+                GLib.Variant("(uso)", (xid, sender, path)))
+            self._queue_legacy(xid, sender, path)
+            invocation.return_value(None)
+        elif method == "UnregisterWindow":
+            xid = int(params.unpack()[0])
+            self.host_menus.pop(xid, None)
+            self.host.emit_signal(
+                None, REG_PATH, REG_IFACE, "WindowUnregistered",
+                GLib.Variant("(u)", (xid,)))
+            self._remove_legacy(xid)
+            invocation.return_value(None)
+        elif method == "GetMenuForWindow":
+            xid = int(params.unpack()[0])
+            service, path = self.host_menus.get(xid, ("", "/"))
+            invocation.return_value(GLib.Variant("(so)", (service, path)))
+        elif method == "GetMenus":
+            menus = [(x, s, p) for x, (s, p) in self.host_menus.items()]
+            invocation.return_value(GLib.Variant("(a(uso))", (menus,)))
+        else:
+            invocation.return_dbus_error(
+                "org.freedesktop.DBus.Error.UnknownMethod", method)
+
+    def _existing_reg_signal(self, conn, sender, path, iface, signal_name, params):
+        if signal_name == "WindowRegistered":
+            xid, service, menu_path = params.unpack()
+            self._queue_legacy(int(xid), service, menu_path)
+        else:
+            self._remove_legacy(int(params.unpack()[0]))
+
+    def _queue_legacy(self, xid, source, path):
+        self.pending[xid] = (source, path, time.monotonic() + 10.0)
+        GLib.timeout_add(50, self._try_legacy, xid)
+
+    def _try_legacy(self, xid):
+        item = self.pending.get(xid)
+        if not item:
+            return False
+        source, path, deadline = item
+        app_id = self.host_app_id(xid)
+        if app_id:
+            self.pending.pop(xid, None)
+            self._install_legacy(xid, app_id, source, path)
+            return False
+        if time.monotonic() >= deadline:
+            self.pending.pop(xid, None)
+            log("ignored host DBusMenu for unrecognized XID %d" % xid)
+            return False
+        return True
+
+    def _remove_legacy(self, xid):
+        self.pending.pop(xid, None)
+        relay = self.relays.get(xid)
+        if relay and relay.signature[0] == "legacy":
+            self._unregister_unity(xid)
+            self._close_relay(xid)
+            GLib.idle_add(self._probe_xid, xid, time.monotonic() + 2.0)
+
+    def _relay_path(self, xid):
+        self.serial += 1
+        return "/com/maverick/HostMenu/w_%x_%d" % (xid, self.serial)
+
+    def _install_legacy(self, xid, app_id, source, source_path):
+        sig = ("legacy", source, source_path)
+        old = self.relays.get(xid)
+        if old and old.signature == sig:
+            return
+        path = self._relay_path(xid)
+        try:
+            new = LegacyProxy(self, xid, source, source_path, path)
+            self._register_unity(xid, path)
+            if old:
+                old.close()
+            self.relays[xid] = new
+            log("XID 0x%x %s DBusMenu relayed" % (xid, app_id))
+        except Exception as exc:
+            log("XID 0x%x DBusMenu relay failed: %s" % (xid, exc))
+
+    def _register_unity(self, xid, path):
+        self.unity.call_sync(
+            REG_NAME, REG_PATH, REG_IFACE, "RegisterWindow",
+            GLib.Variant("(uo)", (xid, path)), None,
+            Gio.DBusCallFlags.NONE, 2000, None)
+
+    def _unregister_unity(self, xid):
+        try:
+            self.unity.call_sync(
+                REG_NAME, REG_PATH, REG_IFACE, "UnregisterWindow",
+                GLib.Variant("(u)", (xid,)), None,
+                Gio.DBusCallFlags.NONE, 1000, None)
+        except GLib.Error:
+            pass
+
+    def _close_relay(self, xid):
+        relay = self.relays.pop(xid, None)
+        if relay:
+            try:
+                relay.close()
+            except Exception:
+                pass
+
+    def _root_windows(self):
+        text = subprocess.check_output(
+            ["xprop", "-root", "_NET_CLIENT_LIST_STACKING"],
+            text=True, stderr=subprocess.DEVNULL)
+        return {int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]+", text)}
+
+    def _window_props(self, xid):
+        argv = ["xprop", "-id", "0x%x" % xid] + list(GTK_PROPS)
+        proc = subprocess.run(
+            argv, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+        if proc.returncode:
+            return {}
+        return {name: prop(proc.stdout, name) for name in GTK_PROPS
+                if prop(proc.stdout, name) is not None}
+
+    def _start_x11_watch(self):
+        proc = subprocess.Popen(
+            ["xprop", "-spy", "-root", "_NET_CLIENT_LIST_STACKING"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            bufsize=1)
+        self.xprop_proc = proc
+
+        def reader():
+            for _line in proc.stdout:
+                GLib.idle_add(self.scan_windows)
+            log("X11 client-list watcher exited")
+
+        threading.Thread(target=reader, daemon=True).start()
+
+    def scan_windows(self):
+        try:
+            current = self._root_windows()
+        except Exception as exc:
+            log("window scan failed: %s" % exc)
+            return False
+
+        gone = self.known - current
+        new = current - self.known
+        self.known = current
+
+        for xid in gone:
+            self.pending.pop(xid, None)
+            self._unregister_unity(xid)
+            self._close_relay(xid)
+
+        deadline = time.monotonic() + 10.0
+        for xid in new:
+            GLib.timeout_add(50, self._probe_xid, xid, deadline)
+        return False
+
+    def _probe_xid(self, xid, deadline):
+        if xid not in self.known:
+            return False
+
+        old = self.relays.get(xid)
+        if old and old.signature[0] == "legacy":
+            return False
+
+        app_id = self.host_app_id(xid)
+        props = self._window_props(xid)
+        host_name = props.get("_GTK_UNIQUE_BUS_NAME")
+        has_menu = (props.get("_GTK_APP_MENU_OBJECT_PATH") or
+                    props.get("_GTK_MENUBAR_OBJECT_PATH"))
+
+        if app_id and host_name and has_menu:
+            sig = ("gmenu", host_name,
+                   props.get("_GTK_APP_MENU_OBJECT_PATH"),
+                   props.get("_GTK_MENUBAR_OBJECT_PATH"),
+                   props.get("_GTK_APPLICATION_OBJECT_PATH"),
+                   props.get("_GTK_WINDOW_OBJECT_PATH"),
+                   props.get("_UNITY_OBJECT_PATH"))
+            if old and old.signature == sig:
+                return False
+            path = self._relay_path(xid)
+            try:
+                new = GMenuRelay(self, xid, app_id, props, path)
+                self._register_unity(xid, path)
+                if old:
+                    old.close()
+                self.relays[xid] = new
+                log("XID 0x%x %s GMenu->DBusMenu relayed" % (xid, app_id))
+                return False
+            except Exception as exc:
+                log("XID 0x%x GMenu relay pending: %s" % (xid, exc))
+
+        if time.monotonic() < deadline:
+            return True
+        return False
+
+def main():
+    try:
+        bridge = Bridge()
+    except Exception as exc:
+        log("bridge startup failed: %s" % exc)
+        return 1
+
+    print("READY", flush=True)
+    GLib.MainLoop().run()
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

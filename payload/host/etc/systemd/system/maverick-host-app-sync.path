@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch Debian application entries for Maverick
+
+[Path]
+PathChanged=/usr/share/applications
+PathChanged=/usr/local/share/applications
+Unit=maverick-host-app-sync.service
+
+[Install]
+WantedBy=multi-user.target

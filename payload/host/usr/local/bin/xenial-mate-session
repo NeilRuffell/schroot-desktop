@@ -1,0 +1,31 @@
+#!/bin/bash
+
+UID_NUM="$(id -u)"
+
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+export PULSE_SERVER="unix:/run/user/${UID_NUM}/pulse/native"
+export ICEAUTHORITY="$HOME/.ICEauthority"
+export XDG_DATA_DIRS="/host-xdg:/usr/share/mate:/usr/local/share:/usr/share"
+
+systemctl --user start maverick-host-launcher.service
+
+cleanup()
+{
+    systemctl --user stop maverick-host-launcher.service
+}
+
+trap cleanup EXIT HUP INT TERM
+
+schroot \
+  --preserve-environment \
+  --directory="$HOME" \
+  -c xenial \
+  -- \
+  /usr/bin/dbus-launch --exit-with-session /usr/bin/mate-session
+
+STATUS=$?
+
+cleanup
+trap - EXIT
+
+exit "$STATUS"

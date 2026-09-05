@@ -1,0 +1,8 @@
+[xenial]
+description=Ubuntu MATE 16.04 Xenial
+type=directory
+directory=@MATE_ROOT@
+users=@TARGET_USER@
+preserve-environment=true
+profile=xenial-desktop
+setup.nssdatabases=

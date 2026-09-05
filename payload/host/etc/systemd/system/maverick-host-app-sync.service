@@ -1,0 +1,6 @@
+[Unit]
+Description=Synchronize Debian applications into Maverick menu
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/maverick-sync-host-apps

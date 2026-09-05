@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Ubuntu MATE 16.04
+Comment=Ubuntu MATE 16.04 Xenial
+Exec=/usr/local/bin/xenial-mate-session
+TryExec=/usr/local/bin/xenial-mate-session
+Type=Application
+DesktopNames=MATE

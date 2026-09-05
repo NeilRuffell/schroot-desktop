@@ -1,0 +1,47 @@
+#!/bin/bash
+
+UID_NUM="$(id -u)"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+export PULSE_SERVER="unix:/run/user/${UID_NUM}/pulse/native"
+export ICEAUTHORITY="$HOME/.ICEauthority"
+
+# Reproduce the identity of Xenial's native Ubuntu Unity session.
+export DESKTOP_SESSION=ubuntu
+export XDG_SESSION_DESKTOP=ubuntu
+export XDG_CURRENT_DESKTOP=Unity
+export GDMSESSION=ubuntu
+
+# Start the existing Debian host-application bridge for this login only.
+HOST_DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/${UID_NUM}/bus}"
+
+systemctl --user start maverick-host-launcher.service
+
+cleanup() {
+    DBUS_SESSION_BUS_ADDRESS="$HOST_DBUS_SESSION_BUS_ADDRESS" \
+        systemctl --user stop maverick-host-launcher.service
+}
+
+trap cleanup EXIT HUP INT TERM
+
+# Unity's Xenial user-Upstart session creates and owns its own session D-Bus.
+unset DBUS_SESSION_BUS_ADDRESS
+unset DBUS_SESSION_BUS_PID
+unset DBUS_SESSION_BUS_WINDOWID
+
+# Let Xenial Xsession add its native Ubuntu/GNOME directories around this
+# base path while also exposing mirrored Debian applications and resources.
+unset XDG_CONFIG_DIRS
+export XDG_DATA_DIRS="/host-xdg:/usr/local/share:/usr/share"
+
+schroot \
+  --preserve-environment \
+  --directory="$HOME" \
+  -c xenial-unity -- \
+  /etc/X11/Xsession "gnome-session --session=ubuntu"
+
+STATUS=$?
+cleanup
+trap - EXIT
+exit "$STATUS"

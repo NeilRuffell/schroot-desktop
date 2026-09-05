@@ -1,0 +1,15 @@
+# Debian-side helpers for legacy Xenial desktop sessions.
+
+case "$DESKTOP_SESSION" in
+    ubuntu-mate-xenial|ubuntu-unity-xenial)
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+            /usr/libexec/polkit-mate-authentication-agent-1 \
+            >"$HOME/.cache/xenial-host-polkit.log" 2>&1 &
+        ;;
+esac
+
+if [ "$DESKTOP_SESSION" = "ubuntu-mate-xenial" ]; then
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+        /usr/bin/blueman-applet \
+        >"$HOME/.cache/xenial-host-blueman.log" 2>&1 &
+fi

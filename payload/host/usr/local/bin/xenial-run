@@ -1,0 +1,77 @@
+#!/usr/bin/python3
+
+import os
+import sys
+from pathlib import Path
+
+if len(sys.argv) < 2:
+    print("usage: xenial-run COMMAND [ARG ...]", file=sys.stderr)
+    sys.exit(2)
+
+uid = os.getuid()
+
+# Find the live Xenial MATE panel.  It carries the actual
+# graphical-session environment and lives inside the active schroot.
+panel_pid = None
+
+for proc in Path("/proc").iterdir():
+    if not proc.name.isdigit():
+        continue
+
+    try:
+        if proc.stat().st_uid != uid:
+            continue
+
+        comm = (proc / "comm").read_text().strip()
+
+        if comm != "mate-panel":
+            continue
+
+        root = os.readlink(proc / "root")
+
+        if root.startswith("/run/schroot/mount/xenial-"):
+            panel_pid = proc.name
+            session = Path(root).name
+            break
+    except (OSError, PermissionError):
+        continue
+
+if panel_pid is None:
+    print("xenial-run: active Xenial MATE session not found",
+          file=sys.stderr)
+    sys.exit(1)
+
+# Use the environment of the real Xenial desktop session rather than
+# inheriting host Caja's private XDG environment.
+raw = Path(f"/proc/{panel_pid}/environ").read_bytes()
+
+session_env = {}
+
+for item in raw.split(b"\0"):
+    if not item or b"=" not in item:
+        continue
+
+    key, value = item.split(b"=", 1)
+
+    try:
+        session_env[
+            key.decode("utf-8", "surrogateescape")
+        ] = value.decode("utf-8", "surrogateescape")
+    except Exception:
+        continue
+
+os.environ.clear()
+os.environ.update(session_env)
+
+os.execv(
+    "/usr/bin/schroot",
+    [
+        "/usr/bin/schroot",
+        "--run-session",
+        "-c", session,
+        "--preserve-environment",
+        "--directory=" + os.environ["HOME"],
+        "--",
+        *sys.argv[1:],
+    ],
+)

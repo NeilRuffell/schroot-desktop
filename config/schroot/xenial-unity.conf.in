@@ -1,0 +1,8 @@
+[xenial-unity]
+description=Ubuntu Unity 16.04 Xenial
+type=directory
+directory=@UNITY_ROOT@
+users=@TARGET_USER@
+preserve-environment=true
+profile=xenial-unity-desktop
+setup.nssdatabases=

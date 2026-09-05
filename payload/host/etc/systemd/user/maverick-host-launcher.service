@@ -1,0 +1,11 @@
+[Unit]
+Description=Debian host applications for legacy desktop session
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/maverick-host-launcher
+Restart=on-failure
+KillMode=control-group
+TimeoutStopSec=5s
+
+[Install]

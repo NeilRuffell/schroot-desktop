@@ -108,6 +108,11 @@ is documented in:
 
 - [`docs/SCHROOT-SESSION-CLEANUP.md`](docs/SCHROOT-SESSION-CLEANUP.md)
 
+The version-controlled integration installer for existing Xenial roots is
+documented in:
+
+- [`docs/INSTALLER.md`](docs/INSTALLER.md)
+
 The handoff is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
 
 ## Design rules

@@ -1,0 +1,190 @@
+#!/usr/bin/python3
+
+import configparser
+import json
+import os
+import socket
+import signal
+import subprocess
+import threading
+
+# Reap exited launcher children without making SIGCHLD ignored.
+# A caught handler is reset to SIG_DFL across exec(), so host apps
+# retain normal child-process semantics.
+def reap_children(signum, frame):
+    while True:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+        except ChildProcessError:
+            break
+
+signal.signal(signal.SIGCHLD, reap_children)
+
+uid = os.getuid()
+runtime = "/run/user/%d" % uid
+sockpath = runtime + "/maverick-host-launch.sock"
+logpath = runtime + "/maverick-host-launch.log"
+
+unity_menu_manager = None
+unity_menu_lock = threading.Lock()
+
+def configure_unity_menu(address, request_env):
+    global unity_menu_manager
+
+    with unity_menu_lock:
+        if unity_menu_manager is None:
+            from maverick_unity_menu import UnityMenuRelayManager
+            unity_menu_manager = UnityMenuRelayManager(uid, logpath)
+
+        manager = unity_menu_manager
+
+    manager.configure(address, request_env)
+
+def configure_unity_host_theme(env):
+    """Apply the GTK theme saved by the Host appearance tool."""
+    settings_path = os.path.join(
+        env.get("HOME", "/"),
+        ".config",
+        "gtk-3.0",
+        "settings.ini",
+    )
+    settings = configparser.ConfigParser(interpolation=None)
+
+    try:
+        with open(settings_path, encoding="utf-8") as stream:
+            settings.read_file(stream)
+        theme = settings.get("Settings", "gtk-theme-name").strip()
+    except (OSError, configparser.Error, KeyError):
+        return
+
+    if theme:
+        # GTK_THEME outranks Unity's XSettings theme for Host GTK 3 apps.
+        env["GTK_THEME"] = theme
+
+try:
+    os.unlink(sockpath)
+except FileNotFoundError:
+    pass
+
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sockpath)
+os.chmod(sockpath, 0o600)
+server.listen(16)
+
+def handle(conn):
+    try:
+        data = b""
+        while b"\n" not in data:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > 1048576:
+                raise RuntimeError("request too large")
+
+        req = json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
+        argv = req.get("argv", [])
+
+        if not argv or not isinstance(argv, list):
+            raise RuntimeError("invalid argv")
+
+        env = os.environ.copy()
+
+        allowed = (
+            "DISPLAY",
+            "XAUTHORITY",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "XDG_CURRENT_DESKTOP",
+            "DESKTOP_SESSION",
+            "PULSE_SERVER",
+            "SESSION_MANAGER",
+            "ICEAUTHORITY",
+            "DESKTOP_STARTUP_ID",
+            "BAMF_DESKTOP_FILE_HINT",
+        )
+
+        for key in allowed:
+            value = req.get("env", {}).get(key)
+            if value:
+                env[key] = value
+
+        desktops = env.get("XDG_CURRENT_DESKTOP", "").split(":")
+        if "Unity" in desktops:
+            configure_unity_host_theme(env)
+
+        unity_bus = req.get("unity_bus")
+
+        if unity_bus:
+            modules = [
+                item
+                for item in env.get("GTK_MODULES", "").split(":")
+                if item
+            ]
+
+            if "appmenu-gtk-module" not in modules:
+                modules.append("appmenu-gtk-module")
+
+            env["GTK_MODULES"] = ":".join(modules)
+            env["UBUNTU_MENUPROXY"] = "1"
+
+            configure_unity_menu(
+                unity_bus,
+                req.get("env", {}),
+            )
+
+        env["XDG_RUNTIME_DIR"] = runtime
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=%s/bus" % runtime
+
+        cwd = req.get("cwd") or env.get("HOME", "/")
+        if not os.path.isdir(cwd):
+            cwd = env.get("HOME", "/")
+
+        # Start every host application behind a generic launch gate.
+        #
+        # The shell becomes the session leader, stops itself before
+        # executing the real application, and keeps the same PID across
+        # exec().  This gives the Xenial client time to register that PID
+        # with BAMF before the application can create its first X window.
+        gate_argv = [
+            "/bin/sh",
+            "-c",
+            'kill -STOP $$; exec "$@"',
+            "maverick-host-gate",
+        ] + argv
+
+        with open(logpath, "ab", buffering=0) as log:
+            proc = subprocess.Popen(
+                gate_argv,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+
+        # Do not return the PID until the launch gate is definitely stopped.
+        waited_pid, status = os.waitpid(proc.pid, os.WUNTRACED)
+
+        if waited_pid != proc.pid or not os.WIFSTOPPED(status):
+            raise RuntimeError(
+                "host launch gate failed for pid %d" % proc.pid
+            )
+
+        conn.sendall(("OK %d\n" % proc.pid).encode("ascii"))
+
+    except Exception as exc:
+        try:
+            conn.sendall(("ERROR %s\n" % exc).encode("utf-8", "replace"))
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+while True:
+    conn, _ = server.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
