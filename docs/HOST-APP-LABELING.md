@@ -125,7 +125,7 @@ main display name receives (Host)
         ↓
 Exec= is wrapped with host-run
         ↓
-Unity/BAMF matching metadata is handled generically
+generic Host/BAMF identity rules are applied
         ↓
 application appears in the Xenial desktop
 ```
@@ -134,40 +134,35 @@ No additional runtime daemon or watcher is required.
 
 ## Unity launcher / BAMF matching
 
-Unity uses BAMF to associate a running application window with the `.desktop` launcher that started it. The project intentionally changes mirrored Debian desktop IDs to unique `debian-*` IDs so host and Xenial-native launchers can coexist.
+Unity uses BAMF to associate a running application window with the `.desktop` launcher that started it. Schroot Desktop intentionally changes mirrored Debian desktop IDs to unique `debian-*` IDs so host and Xenial-native launchers can coexist.
 
-Testing showed two classes of host launchers:
-
-```text
-source has StartupWMClass
-    -> existing BAMF matching works
-
-source lacks StartupWMClass
-    -> the debian-* desktop ID can no longer be inferred reliably
-    -> Unity may show a temporary launcher icon plus a second running-app icon
-```
-
-Confirmed working examples with native matching metadata were:
+The duplicate-icon failure was captured at the BAMF object level. During a failing Visual Studio Code launch, BAMF first created a startup application for:
 
 ```text
-Firefox ESR:
-  StartupWMClass=firefox-esr
-  WM_CLASS second value=firefox-esr
-
-Synaptic:
-  StartupWMClass=synaptic
-  WM_CLASS second value=Synaptic
+Visual Studio Code (Host)
+/host-xdg/applications/debian-code.desktop
+Starting=true
 ```
 
-Deskflow provided the confirmed no-`StartupWMClass` case:
+When the real Code X11 window appeared, BAMF created a **second** runtime application object instead of attaching that window to the existing Host startup application. Unity therefore displayed a temporary Host launcher icon plus a second running-app icon; the first icon later disappeared.
+
+The bridge had already supplied the correct mirrored identity to the real window, but source `StartupWMClass` metadata could cause Xenial BAMF to reject that identity. Real examples showed why preserving host `StartupWMClass` is not reliable across the bridge:
 
 ```text
-WM_CLASS="deskflow", "Deskflow"
-_GTK_APPLICATION_ID=org.deskflow.deskflow
-mirrored ID=debian-org.deskflow.deskflow.desktop
+Visual Studio Code:
+  source StartupWMClass=Code
+  live WM_CLASS="code", "code"
+
+GIMP 3:
+  source StartupWMClass=gimp-3.0
+  live WM_CLASS="gimp", "Gimp"
 ```
 
-The accepted generic fix is **not** to synthesize per-application `StartupWMClass` values. Instead, the synchronizer preserves source `StartupWMClass` metadata when present and, only when it is absent, adds BAMF's desktop-file ownership hint to the mirrored launch command:
+The accepted solution is fully generic and has two parts.
+
+### 1. Every mirrored Host launcher has an authoritative desktop identity
+
+The synchronizer prepends the mirrored Xenial-visible desktop path to generated `Exec=` lines:
 
 ```text
 BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
@@ -176,28 +171,64 @@ BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
 For example:
 
 ```ini
-Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop /usr/local/bin/host-run deskflow
+Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-code.desktop /usr/local/bin/host-run /usr/share/code/code %F
 ```
 
-The path is intentionally the path visible inside the Xenial desktop session, where BAMF runs.
+This rule applies to **every** generated `debian-*.desktop`, not only launchers missing `StartupWMClass`.
 
-The `host-run` client and Debian host launcher both use environment allow-lists. `BAMF_DESKTOP_FILE_HINT` must therefore be forwarded by all of these generic bridge components:
+Both Xenial `host-run` clients are identical and receive this value. The Debian launcher also keeps `BAMF_DESKTOP_FILE_HINT` in its environment allow-list.
+
+### 2. Register the real Debian launch PID with Xenial BAMF before the application can create a window
+
+The asynchronous bridge breaks BAMF's normal GIO launch-PID ancestry: Xenial starts `host-run`, while the real GUI process is later spawned by the separate Debian `maverick-host-launcher` service. Environment inheritance alone is not universal because Electron/Chromium-style applications can re-exec or otherwise discard launch environment variables.
+
+The accepted bridge therefore restores the PID relationship explicitly:
 
 ```text
-/srv/xenial/usr/local/bin/host-run
-/srv/xenial-unity/usr/local/bin/host-run
-/usr/local/libexec/maverick-host-launcher
+mirrored debian-*.desktop
+        ↓
+host-run knows the mirrored desktop path
+        ↓
+Debian launcher creates a stopped launch-gate process
+        ↓
+launcher returns that real PID
+        ↓
+Xenial host-run calls BAMF RegisterApplicationForPid
+        ↓
+PID -> /host-xdg/applications/debian-*.desktop
+        ↓
+host-run sends SIGCONT
+        ↓
+gate execs the real Debian application with the same PID
 ```
 
-The forwarded value was confirmed in the real Debian Deskflow process environment:
+The stopped launch gate removes the race where a fast application could create its first X11 window before BAMF receives the PID registration. The Debian launcher still uses a real `SIGCHLD` reaper; it does **not** use `SIGCHLD=SIG_IGN`.
+
+BAMF's registered-PID matching walks the process parent tree, so normal descendants and wrappers inherit the registered desktop identity. Runtime testing also confirmed the correct `_BAMF_DESKTOP_FILE` on Electron Visual Studio Code and on privileged GUFW after its helper/process chain detached.
+
+### `StartupWMClass` is removed from every mirrored Host launcher
+
+Once the bridge supplies an authoritative PID-to-desktop relationship, copied Debian `StartupWMClass` values become a weaker heuristic and can actively veto the correct Host identity. The synchronizer therefore strips `StartupWMClass=` from the main `[Desktop Entry]` of **all** generated `debian-*.desktop` files.
+
+This does not modify Debian's real `.desktop` files and does not change Xenial-native launchers. It only applies to the generated Host mirror.
+
+The current generic mirror pass also forces `StartupNotify=false`. This setting was present during final regression testing, but it was not sufficient by itself to solve the duplicate-icon problem; the decisive accepted behavior is authoritative PID registration plus removal of mirrored `StartupWMClass`.
+
+The final rule is therefore:
 
 ```text
-BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop
+all current and future debian-* mirrors
+    -> unique mirrored desktop ID
+    -> BAMF_DESKTOP_FILE_HINT for that mirrored ID
+    -> no mirrored StartupWMClass
+    -> StartupNotify=false in the current tested mirror
+    -> launch through host-run
+    -> real Debian PID registered with Xenial BAMF before exec continues
 ```
 
-After this generic rule was applied, the previously affected host applications tested in Unity associated with a single launcher icon instead of creating duplicate/transient launcher entries. Existing applications with valid `StartupWMClass`, including Firefox ESR and Synaptic, remain on their original matching path.
+Do not add application-specific WM-class tables, Electron exceptions, per-app launcher hacks, or a downstream BAMF patch for this problem.
 
-Do not add application-specific `StartupWMClass` tables or per-app launcher fixes for this problem. Future mirrored host applications inherit the conditional BAMF rule automatically through the existing synchronizer.
+Final cross-application testing in Unity showed the duplicate/replacement launcher behavior resolved across the tested Host applications, including Visual Studio Code, GIMP, Firefox ESR, Synaptic, GUFW/Firewall Configuration, and ordinary GTK host applications.
 
 ## Host Caja `Open With` and file-context menus
 
@@ -280,8 +311,9 @@ Xenial desktop mirror:
   localized Name[]=    -> append " (Host)"
   desktop-action Name= -> preserve
   Exec=                -> wrap with host-run
-  StartupWMClass       -> preserve when supplied by source
-  if no StartupWMClass -> prepend BAMF_DESKTOP_FILE_HINT for the debian-* file
+  BAMF identity        -> prepend mirrored BAMF_DESKTOP_FILE_HINT to every Exec=
+  StartupWMClass       -> remove from generated Host mirror
+  StartupNotify        -> force false in current tested mirror
   TryExec=             -> remove
   DBusActivatable=     -> force false
   OnlyShowIn=          -> remove
@@ -290,8 +322,11 @@ Xenial desktop mirror:
   Hidden=true          -> preserve
   Categories           -> preserve
 
-Host-run environment bridge:
-  BAMF_DESKTOP_FILE_HINT -> forward when present
+Host-run / Debian launcher bridge:
+  BAMF_DESKTOP_FILE_HINT -> forward/use as mirrored desktop identity
+  DESKTOP_STARTUP_ID     -> forward when present
+  real launch PID         -> register with Xenial BAMF before SIGCONT/exec
+  child handling          -> real SIGCHLD reaper; never SIGCHLD=SIG_IGN
 
 Host Caja Debian entries:
   desktop ID           -> preserve original ID
@@ -310,4 +345,4 @@ Host Caja Xenial entries:
   MimeType=            -> preserve
 ```
 
-The host-label view, Unity/BAMF launcher matching, and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.
+The host-label view, global Unity/BAMF launcher matching, and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.
