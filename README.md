@@ -1,20 +1,23 @@
 # Schroot Desktop
 
-Run a classic Ubuntu MATE userspace directly on a modern Debian host, on the real X11 desktop — no VM, no VNC/RDP, no Xephyr, and no nested display server.
+Run classic Ubuntu desktop userspaces directly on a modern Debian host, on the real X11 desktop — no VM, no VNC/RDP, no Xephyr, and no nested display server.
 
 The current reference build uses:
 
 - **Debian 13** as the real host OS
 - **Ubuntu MATE 16.04 Xenial** in `/srv/xenial`
+- **Ubuntu Unity 16.04 Xenial** in a separate `/srv/xenial-unity` root
 - **LightDM + Xorg** from Debian
-- **MATE 1.12 / Marco 1.12** from Xenial
-- **Caja 1.26** from Debian for normal file management and desktop ownership
+- **MATE 1.12 / Marco 1.12** from Xenial for the MATE session
+- **Unity 7 / Compiz** from Xenial for the Unity session
+- **Caja 1.26** from Debian for normal MATE file management and desktop ownership
+- **Nautilus 3.14/3.18-era Xenial stack** for the Unity desktop/file manager
 - Debian-owned kernel, graphics, networking, PipeWire, UDisks2, PolicyKit and current applications
-- a `host-run` bridge so modern Debian applications appear in the Xenial MATE menus and execute with Debian libraries
+- a `host-run` bridge so modern Debian applications appear in the Xenial desktops and execute with Debian libraries
 
 ## Why
 
-The goal is a daily-driver workstation with the classic GTK2-era Ubuntu/MATE desktop model while keeping modern hardware support, current host applications, and a maintained Debian base.
+The goal is a daily-driver workstation with classic Ubuntu desktop environments while keeping modern hardware support, current host applications, and a maintained Debian base.
 
 ```text
 Debian 13 host
@@ -24,48 +27,61 @@ Debian 13 host
 ├── PipeWire / WirePlumber
 ├── UDisks2 / UPower / polkitd
 ├── current Debian applications
-├── Caja 1.26 + Debian GVfs
+├── Caja 1.26 + Debian GVfs for the MATE session
 │
 └── physical X11 display :0
-       ↓
-   schroot /srv/xenial
-       ↓
-Ubuntu MATE 16.04
-├── mate-session
-├── mate-panel
-├── Marco
-├── mate-settings-daemon
-└── classic GTK2 desktop shell
+       ├── schroot /srv/xenial
+       │    └── Ubuntu MATE 16.04
+       │         ├── mate-session
+       │         ├── mate-panel
+       │         ├── Marco
+       │         └── mate-settings-daemon
+       │
+       └── schroot /srv/xenial-unity
+            └── Ubuntu Unity 16.04
+                 ├── Unity 7 / Compiz
+                 ├── unity-settings-daemon
+                 ├── ubuntu-session / user Upstart
+                 └── native Xenial Nautilus
 ```
+
+The two Xenial roots are deliberately independent. They share `/home` and matching UID/GID values, but their desktop packages remain isolated.
 
 ## Current status
 
 The reference system is working with:
 
 - normal LightDM → Xenial MATE login
-- normal logout, shutdown and reboot
-- Debian Caja 1.26 owning the desktop and handling normal folder browsing
-- Debian Caja + Debian GVfs + host UDisks2 removable-media integration
+- normal LightDM → Xenial Unity login
+- both desktops running directly on physical X11 `:0`
+- normal MATE logout, shutdown and reboot
+- Debian Caja 1.26 owning the MATE desktop and handling normal folder browsing
+- native Xenial Nautilus owning the Unity desktop/file-management experience
+- Debian Caja + Debian GVfs + host UDisks2 removable-media integration in MATE
+- Xenial Nautilus/GVfs + host UDisks2 removable/fixed-volume integration in Unity
 - Xenial GVfs retained for Xenial-native applications
 - Xenial audio through Debian PipeWire-Pulse
-- MATE volume control
-- Debian graphical PolicyKit prompts
-- Debian Blueman applet
-- automatic mirroring of Debian application launchers into MATE
+- Debian graphical PolicyKit prompts in both MATE and Unity
+- Debian Blueman applet in the MATE session
+- automatic mirroring of Debian application launchers into Xenial desktops
 - automatic `(Host)` suffixes on all mirrored Debian application names
 - `(Host)` suffixes also preserved in Debian Caja `Open With` and file-context application menus through a private Caja XDG application view
 - simultaneous Debian-host and Xenial-native MIME handlers in host Caja, with Xenial entries launched back into the existing Xenial MATE session through `xenial-run`
 - coexistence of Xenial-native and Debian-host versions of the same application
-- XSMP/ICE integration so compliant host applications close normally during MATE logout
+- XSMP/ICE integration for the established MATE host-app path
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
-- current applications such as Discord installed on Debian and launched from the Xenial desktop
-- verified hardware acceleration on both Debian and Xenial with negligible idle desktop overhead
+- current applications such as Discord installed on Debian and launched from Xenial
+- verified hardware acceleration on the tested MATE and Unity sessions
 
 ## Documentation
 
 The current architecture/build handoff is in:
 
 - [`docs/CURRENT-HANDOFF.md`](docs/CURRENT-HANDOFF.md)
+
+The tested parallel Xenial Unity build is documented in:
+
+- [`docs/XENIAL-UNITY.md`](docs/XENIAL-UNITY.md)
 
 Host Caja desktop integration, including its private XDG application view and Xenial MIME-handler bridge, is documented in:
 
@@ -84,19 +100,21 @@ The handoff is the canonical technical checkpoint and is updated only after a tr
 ## Design rules
 
 1. Debian owns hardware, backend services, current applications and system updates.
-2. Xenial owns the classic MATE shell and its legacy desktop behavior.
-3. Debian Caja owns normal file management and desktop ownership; Xenial GVfs may remain available for Xenial-native applications.
-4. Do not recursively bind the host `/run` into schroot; expose only the runtime paths actually required.
-5. Prefer generic integration fixes over per-application hacks.
-6. Install modern applications on Debian, not inside Xenial, unless there is a specific reason otherwise.
-7. Mirrored host launchers use distinct desktop IDs so they cannot silently replace Xenial-native launchers.
-8. Every mirrored Debian application is visibly suffixed with `(Host)` so the execution side is always unambiguous.
-9. Debian's real `.desktop` files remain untouched; host Caja uses a generated private XDG view when it needs `(Host)` labels while preserving native MIME/default-app IDs.
-10. Host Caja's private application view may expose Xenial-native handlers with `xenial-` desktop IDs and route them into the already-running Xenial session through `xenial-run`.
+2. Each Xenial root owns its classic desktop shell and legacy desktop behavior.
+3. Keep MATE and Unity in separate roots; do not merge their package sets.
+4. Debian Caja owns normal MATE file management and desktop ownership; Unity keeps native Xenial Nautilus unless a demonstrated problem justifies changing it.
+5. Do not recursively bind the host `/run` into schroot; expose only the runtime paths actually required.
+6. Prefer generic integration fixes over per-application hacks.
+7. Install modern applications on Debian, not inside Xenial, unless there is a specific reason otherwise.
+8. Mirrored host launchers use distinct desktop IDs so they cannot silently replace Xenial-native launchers.
+9. Every mirrored Debian application is visibly suffixed with `(Host)` so the execution side is always unambiguous.
+10. Debian's real `.desktop` files remain untouched; generated XDG views are used where desktop-specific labeling or MIME integration is required.
+11. Keep the host launcher session-scoped rather than permanently enabled.
+12. Treat package presence inside a Xenial root separately from runtime service ownership; Debian remains responsible for modern hardware-facing daemons.
 
 ## Security note
 
-Xenial is an old userspace. This project deliberately relies on the modern Debian host for the kernel, hardware stack, backend services, primary file manager, and current applications, but that does **not** make Xenial itself a currently supported security boundary. Treat the Xenial userspace accordingly.
+Xenial is an old userspace. This project deliberately relies on the modern Debian host for the kernel, hardware stack, backend services, and current applications, but that does **not** make Xenial a currently supported security boundary. Shared `/home`, X11 and selected runtime paths also mean the schroots are integration environments rather than strong sandboxes. Treat the Xenial userspaces accordingly.
 
 ## Hardware
 
