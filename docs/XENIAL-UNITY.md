@@ -159,7 +159,7 @@ Tested core versions include:
 
 ```text
 unity                  7.4.5+16.04.20190312-0ubuntu1
-compiz                 1:0.9.12.3-0ubuntu1
+compiz                 1:0.9.12.3+16.04.20180221-0ubuntu1
 ubuntu-session         3.18.1.2-1ubuntu1.16.04.2
 unity-settings-daemon  15.04.1+16.04.20160701-0ubuntu3
 unity-control-center   15.04.0+16.04.20171130-0ubuntu1
