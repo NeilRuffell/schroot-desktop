@@ -2,6 +2,24 @@
 
 Accepted project changes are recorded here after they are tested and approved.
 
+## 2026-09-05
+
+- Added the accepted generic Unity Host global-menu/HUD protocol bridge.
+- Kept real Debian Host applications on Debian's user bus while bridging their menu interfaces to the native Xenial Unity session bus.
+- Added support for both Unity-relevant menu families: GMenuModel/GActionGroup via standard `_GTK_*` X11 properties and legacy `com.canonical.dbusmenu` via `com.canonical.AppMenu.Registrar`.
+- Added generic `appmenu-gtk3-module` injection for Unity Host GTK launches so traditional GtkMenuShell/GtkUIManager applications can expose a bridgeable GMenu/GAction surface without per-app launch rules.
+- Added `/usr/local/libexec/maverick_unity_menu.py` as the session helper manager and `/usr/local/libexec/maverick-unity-menu-bridge` as the protocol bridge, both living under the existing session-scoped host launcher lifecycle with no additional systemd unit or permanent daemon.
+- Changed the accepted GMenu path to normalize Host menus onto Unity's native DBusMenu registrar flow instead of rewriting `_GTK_UNIQUE_BUS_NAME` and forcing a later cache refresh.
+- Confirmed `RegisterWindow` removes the first-focus race: supported Host applications now receive their Unity global menu without switching focus away and back.
+- Removed the earlier direct HUD `AddSources`/`SetWindowContext` path from the accepted design. HUD now follows the same native AppMenu registrar registration as the global menu.
+- Removed `_BAMF_DESKTOP_FILE` X-property presence as a relay gate. Unity WindowStack `debian-*` identity is the authoritative Host-window scope because a valid Host Caja window was proven to have the correct mirrored identity without that X property.
+- Added transparent relay support for existing Host DBusMenu exporters and live GMenu-to-DBusMenu translation for GTK/GMenu exporters, including separate application menu, menubar, `app`, `win`, and `unity` action-group paths where present.
+- Preserved dynamic menu updates rather than using static menu snapshots.
+- Confirmed the universal bridge remains application-agnostic: compatibility is determined by exported menu protocol, not an application whitelist.
+- Accepted the current expected Host compatibility set for supported menu exporters, including Blueman Manager, Caja, Chromium, Visual Studio Code, GDebi, GIMP, GUFW, Deskflow, Evolution, Shutter, Synaptic, and system-config-printer.
+- Final acceptance testing confirmed normal Host launches with no focus-switch workaround; representative acceptance included Caja, Chromium, and Visual Studio Code.
+- Added `docs/UNITY-HOST-MENU-HUD.md` as the canonical implementation reference for the accepted menu/HUD bridge.
+
 ## 2026-09-04
 
 - Established Debian 13 + Ubuntu MATE 16.04 Xenial as the current architecture.
