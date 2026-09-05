@@ -1,9 +1,9 @@
-# Debian 13 Host + Ubuntu MATE 16.04 Xenial Hybrid Desktop
+# Debian 13 Host + Ubuntu Xenial MATE/Unity Hybrid Desktop
 ## Current canonical handoff / replication checkpoint
 
 This document records the current accepted architecture for **Schroot Desktop**.
 
-The project runs an Ubuntu MATE 16.04 Xenial desktop userspace directly on the physical X11 display while Debian 13 remains the real operating system underneath. Failed experiments and superseded fixes are deliberately omitted.
+The project runs classic Ubuntu 16.04 desktop userspaces directly on the physical X11 display while Debian 13 remains the real operating system underneath. The established MATE session and the accepted Unity session use separate Xenial roots. Failed experiments and superseded fixes are deliberately omitted.
 
 ---
 
@@ -18,22 +18,36 @@ Debian 13 host
 ├── PipeWire / WirePlumber
 ├── UDisks2 / UPower / polkitd
 ├── current applications
-├── Caja 1.26 + Debian GVfs
+├── Caja 1.26 + Debian GVfs for MATE
 ├── host-run launcher service
 └── physical X11 display :0
-       ↓
-   schroot /srv/xenial
-       ↓
-Ubuntu MATE 16.04 Xenial
-├── mate-session
-├── mate-panel
-├── Marco 1.12
-├── mate-settings-daemon
-├── classic GTK2 shell behavior
-└── Xenial GVfs remains available for Xenial-native applications
+       ├── schroot /srv/xenial
+       │    └── Ubuntu MATE 16.04 Xenial
+       │         ├── mate-session
+       │         ├── mate-panel
+       │         ├── Marco 1.12
+       │         ├── mate-settings-daemon
+       │         └── classic GTK2 shell behavior
+       │
+       └── schroot /srv/xenial-unity
+            └── Ubuntu Unity 16.04 Xenial
+                 ├── Unity 7 / Compiz
+                 ├── ubuntu-session / Xenial user Upstart
+                 ├── unity-settings-daemon
+                 ├── unity-control-center
+                 └── native Xenial Nautilus/GVfs
 ```
 
-This is not a VM, VNC/RDP session, Xephyr session, nested X server, or remote desktop. Xenial MATE runs directly on the real physical X11 display.
+This is not a VM, VNC/RDP session, Xephyr session, nested X server, or remote desktop. Both accepted Xenial desktop sessions run directly on the real physical X11 display.
+
+The roots are intentionally separate:
+
+```text
+/srv/xenial        -> MATE
+/srv/xenial-unity  -> Unity
+```
+
+They share `/home`. User UID/GID must match between Debian and both Xenial roots.
 
 ## Responsibility split
 
@@ -47,11 +61,11 @@ Debian owns:
 - UDisks2 and UPower
 - polkitd and graphical host helpers
 - current/modern applications
-- Caja 1.26 for normal file management and desktop ownership
+- Caja 1.26 for normal MATE file management and desktop ownership
 - Debian GVfs used by host Caja
 - system/security updates
 
-Xenial owns:
+The MATE root owns:
 
 - MATE session
 - mate-panel
@@ -60,13 +74,23 @@ Xenial owns:
 - classic GTK2 desktop behavior
 - Xenial GVfs for Xenial-native applications
 
-`/home` is shared. User UID/GID must match between Debian and Xenial.
+The Unity root owns:
+
+- Unity 7 / Compiz
+- `ubuntu-session`
+- Xenial user-Upstart session startup
+- `unity-settings-daemon`
+- `unity-control-center`
+- native Xenial Nautilus/GVfs desktop behavior
+- Unity lenses/search components and Xenial theme/default integration
+
+Package presence inside Xenial does not imply runtime service ownership. Debian remains the owner of hardware-facing backend services even when Xenial packages pull older service binaries as dependencies.
 
 ---
 
 # 2. Critical schroot mount rule
 
-Never recursively bind the whole host `/run` into Xenial.
+Never recursively bind the whole host `/run` into either Xenial root.
 
 The old design:
 
@@ -91,9 +115,13 @@ The accepted runtime exposure is selective:
 
 Host XDG resources are exposed at `/host-xdg` as required. Do not reintroduce a recursive `/run` bind.
 
+The Unity root uses its own `xenial-unity-desktop` schroot profile so later desktop-specific mount changes do not risk the MATE root. The current tested mount set is otherwise the same as the MATE profile.
+
 ---
 
-# 3. Xenial session lifecycle
+# 3. Xenial session lifecycles
+
+## MATE
 
 The Debian LightDM session launches Xenial MATE through `/usr/local/bin/xenial-mate-session`.
 
@@ -106,7 +134,45 @@ ICEAUTHORITY=$HOME/.ICEauthority
 XDG_DATA_DIRS=/host-xdg:/usr/share/mate:/usr/local/share:/usr/share
 ```
 
-The session starts the host application launcher as a **session-scoped** systemd user service and stops it when MATE exits. The launcher must not be permanently enabled.
+## Unity
+
+The Debian LightDM session launches the separate `xenial-unity` root through `/usr/local/bin/xenial-unity-session`.
+
+Unity must enter Xenial through:
+
+```text
+/etc/X11/Xsession "gnome-session --session=ubuntu"
+```
+
+because Xenial Unity/Compiz is started by Xenial **user Upstart** from the native `xsession SESSION=ubuntu` event. Directly launching `gnome-session` bypasses part of the native Unity startup contract.
+
+The Debian LightDM environment did not include `/sbin`, so the accepted Unity wrapper sets:
+
+```text
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+This is required for Xenial Upstart helpers such as `initctl` and `upstart-udev-bridge`.
+
+Unity's Xenial user-Upstart session owns its own session D-Bus. The wrapper deliberately removes Debian's inherited `DBUS_SESSION_BUS_ADDRESS` before entering Xenial. The live Compiz environment confirmed a native Xenial abstract `/tmp/dbus-*` address.
+
+For host application discovery, the wrapper seeds:
+
+```text
+XDG_DATA_DIRS=/host-xdg:/usr/local/share:/usr/share
+```
+
+and Xenial Xsession expands the live value to include the native Ubuntu/GNOME directories:
+
+```text
+/usr/share/ubuntu:/usr/share/gnome:/host-xdg:/usr/local/share:/usr/share
+```
+
+Full tested Unity setup: [`XENIAL-UNITY.md`](XENIAL-UNITY.md).
+
+## Host launcher lifecycle
+
+Both desktop wrappers use the same Debian `maverick-host-launcher.service` as a **session-scoped** systemd user service and stop it when the legacy desktop exits. The launcher must not be permanently enabled.
 
 Expected service policy:
 
@@ -125,10 +191,10 @@ The service cgroup is a fallback cleanup mechanism for host applications that do
 
 # 4. Host application bridge
 
-Modern applications normally live on Debian but appear in the Xenial MATE menus.
+Modern applications normally live on Debian but appear in the Xenial desktop menus/Dash.
 
 ```text
-Xenial MATE menu
+Xenial menu / Unity Dash
   ↓
 generated Debian launcher
   ↓
@@ -149,7 +215,7 @@ The existing synchronizer is:
 
 and is triggered by the existing host-app path watcher.
 
-## Xenial menu view
+## Xenial application view
 
 Generated launchers live below:
 
@@ -157,7 +223,7 @@ Generated launchers live below:
 /var/lib/maverick-host-apps/applications
 ```
 
-and are exposed inside Xenial at:
+and are exposed inside the Xenial roots at:
 
 ```text
 /host-xdg/applications
@@ -178,6 +244,8 @@ NotShowIn=           -> remove
 ```
 
 This lets Xenial-native and Debian-host versions of the same application coexist without silently replacing each other.
+
+The Unity root currently carries the same `host-run` client as the MATE root. The client uses `#!/usr/bin/python` and imports Python 2 `json`; therefore the normal Xenial `python` package is part of the accepted Unity integration. `python-minimal` alone is insufficient and produced `ImportError: No module named json`.
 
 ## Correct child handling
 
@@ -206,11 +274,13 @@ Xenial MATE writes its ICE/XSMP cookies to `~/.ICEauthority`, while current Debi
 
 With the explicit `ICEAUTHORITY`, XSMP-capable host applications such as Debian Firefox ESR acquire an `SM_CLIENT_ID` and close normally during MATE logout.
 
+This behavior is confirmed for the MATE path. The Unity host bridge forwards the same relevant environment values, but the full XSMP logout case has not yet been separately revalidated for Unity.
+
 ---
 
-# 6. Debian Caja owns the desktop and file management
+# 6. Debian Caja owns the MATE desktop and file management
 
-The reference build uses Debian Caja 1.26 rather than Xenial Caja for normal browsing and desktop ownership.
+The MATE reference build uses Debian Caja 1.26 rather than Xenial Caja for normal browsing and desktop ownership.
 
 Tested host packages include:
 
@@ -222,6 +292,8 @@ gvfs-fuse 1.57.2-2+deb13u1
 ```
 
 The Xenial Caja package remains installed as a rollback/fallback.
+
+Do **not** apply this Caja takeover to Unity. The accepted Unity baseline intentionally uses native Xenial Nautilus.
 
 ## MATE required components
 
@@ -269,9 +341,7 @@ exe:  /usr/bin/caja
 root: /
 ```
 
-This proves Debian Caja owns the desktop rather than the schroot copy.
-
-Confirmed working:
+Confirmed working in MATE:
 
 - desktop icons and desktop right-click
 - Home / Computer / Trash
@@ -288,7 +358,7 @@ Full details: [`HOST-CAJA.md`](HOST-CAJA.md).
 
 # 7. Host Caja private XDG application view
 
-After Debian Caja took over, its `Open With` and file-context menus read Debian's normal application database and therefore lost the project `(Host)` labels.
+After Debian Caja took over the MATE desktop, its `Open With` and file-context menus read Debian's normal application database and therefore lost the project `(Host)` labels.
 
 The accepted generic fix is a second generated XDG application view:
 
@@ -360,7 +430,7 @@ This allows Debian-host and Xenial-native applications to coexist for the same M
 
 ## `xenial-run`
 
-`/usr/local/bin/xenial-run` launches commands inside the **already-running Xenial MATE schroot session**.
+`/usr/local/bin/xenial-run` currently launches commands inside the **already-running Xenial MATE schroot session**.
 
 It locates the live `mate-panel` process for the current user, verifies that its `/proc/<pid>/root` is `/run/schroot/mount/xenial-*`, imports that process's session environment, and then executes:
 
@@ -368,7 +438,7 @@ It locates the live `mate-panel` process for the current user, verifies that its
 schroot --run-session -c <active-xenial-session> --preserve-environment ...
 ```
 
-The live Xenial session environment was confirmed to contain the required graphical/session values:
+The live Xenial MATE environment was confirmed to contain:
 
 ```text
 DISPLAY=:0
@@ -381,6 +451,8 @@ ICEAUTHORITY=$HOME/.ICEauthority
 ```
 
 A manual `schroot --run-session` launch using this environment successfully opened Xenial GDebi. After the generated Xenial entries were added and Caja restarted, both GDebi choices were visible again for `.deb` files.
+
+This helper remains MATE-specific because it discovers the active root through `mate-panel`. Do not generalize it to Unity until a demonstrated Unity host->legacy-native MIME-handler requirement exists.
 
 The existing synchronizer scans Xenial application directories whenever it runs. No new watcher was added. If Xenial application launchers later change independently of Debian launcher changes, rerun:
 
@@ -400,7 +472,15 @@ Full labeling policy: [`HOST-APP-LABELING.md`](HOST-APP-LABELING.md).
 
 Do not reintroduce `udiskie` or a UDisks1 compatibility layer.
 
-The current design uses host UDisks2. Debian Caja uses Debian GVfs; Xenial GVfs remains available for Xenial-native applications.
+The MATE design uses host UDisks2 with Debian Caja/Debian GVfs for host file management while Xenial GVfs remains available to Xenial-native applications.
+
+The Unity design uses native Xenial Nautilus/GVfs against the same host UDisks2 backend. Tested Unity behavior includes:
+
+- removable USB media visible and browsable
+- fixed internal volume requiring authentication
+- Debian graphical PolicyKit password prompt
+- successful mount through Debian UDisks2
+- mounted fixed volume visible and browsable in Xenial Nautilus
 
 ## Audio
 
@@ -410,28 +490,95 @@ Xenial audio clients use Debian PipeWire-Pulse through:
 PULSE_SERVER=unix:/run/user/$UID/pulse/native
 ```
 
-The Xenial MATE volume applet can control the host sink.
+The Xenial MATE volume applet can control the host sink. Unity continues to use the same host audio architecture.
 
 ## PolicyKit and Bluetooth
 
-Debian's graphical PolicyKit agent and Debian Blueman are used in the Xenial session. Xenial's obsolete Blueman autostart is disabled.
+Debian's graphical PolicyKit agent is used for both accepted Xenial desktop sessions.
 
-Xenial's update notifier is also disabled because Debian owns system updates.
+The current host helper policy is:
+
+```text
+ubuntu-mate-xenial  -> Debian polkit-mate agent + Debian Blueman
+ubuntu-unity-xenial -> Debian polkit-mate agent
+```
+
+The Debian polkit-mate agent can log a warning that `org.gnome.SessionManager` is unavailable on the host user bus during Unity login. The warning is functionally harmless in the tested setup: PolicyKit authentication still works and authorized UDisks2 mounts succeed.
+
+Blueman remains MATE-only until Unity Bluetooth behavior is separately validated.
+
+Xenial's update notifier remains disabled because Debian owns system updates.
 
 ---
 
-# 9. Modern applications belong on Debian
+# 9. Xenial Unity parallel root
+
+The accepted Unity root is a **fresh debootstrap**, not a copy of `/srv/xenial`.
+
+Schroot name/root/profile:
+
+```text
+xenial-unity
+/srv/xenial-unity
+xenial-unity-desktop
+```
+
+The tested final desktop package set includes the core Unity session plus the Ubuntu defaults/integration that proved necessary for a usable desktop:
+
+```text
+unity
+ubuntu-session
+nautilus
+indicator-appmenu
+indicator-application
+indicator-datetime
+indicator-keyboard
+indicator-messages
+indicator-power
+indicator-session
+indicator-sound
+hud
+session-shortcuts
+dbus-x11
+ubuntu-settings
+light-themes
+unity-lens-applications
+unity-lens-files
+zeitgeist-core
+iso-codes
+unity-control-center
+python
+```
+
+`ubuntu-desktop` was deliberately not adopted because it pulls a much broader Xenial desktop/Xorg payload than this architecture requires.
+
+Important proven package effects:
+
+- `ubuntu-settings` + `light-themes` restore the expected Ubuntu/Unity theme defaults and decoration assets
+- Unity lenses + Zeitgeist restore normal Dash application/search content
+- `unity-control-center` restores normal Appearance/Desktop Background integration
+- full `python` supplies the Python 2 standard library required by `host-run`; `python-minimal` alone does not
+
+The Unity root keeps native Nautilus rather than the MATE-specific host Caja takeover.
+
+Full replication details, wrapper contents, LightDM entry and helper hook: [`XENIAL-UNITY.md`](XENIAL-UNITY.md).
+
+---
+
+# 10. Modern applications belong on Debian
 
 Current applications should normally be installed on the Debian host and exposed through the bridge.
 
-Discord provided the confirmed example: when its `.deb` was accidentally installed inside Xenial it appeared in the menu but did not launch correctly. Removing the Xenial copy and installing the `.deb` on Debian fixed it.
+Discord provided the confirmed MATE example: when its `.deb` was accidentally installed inside Xenial it appeared in the menu but did not launch correctly. Removing the Xenial copy and installing the `.deb` on Debian fixed it.
+
+The same generic host application bridge is now confirmed working from the Unity root.
 
 General rule:
 
 ```text
 modern/current application
 → install on Debian host
-→ mirror launcher into Xenial menu
+→ mirror launcher into Xenial desktop
 → run with Debian libraries through host-run
 ```
 
@@ -439,21 +586,23 @@ Do not install current Electron/Chromium-style applications inside Xenial unless
 
 ---
 
-# 10. Current performance baseline
+# 11. Current performance baseline
 
 The reference iMac18,1 was audited and did not require low-level performance tuning.
 
-Confirmed:
+Confirmed for the established baseline:
 
 - `intel_pstate` scales from roughly 400 MHz idle to about 3.6 GHz under load
 - one-minute four-thread load ended around 50 C with no observed frequency collapse
 - Debian uses i915 + Xorg modesetting
-- direct rendering is active on both Debian and Xenial
+- direct rendering is active on Debian and the Xenial MATE session
 - no llvmpipe fallback was observed
 - memory and swap pressure were absent during testing
 - settled idle CPU was typically about 98–99.5% idle
 - Marco runs with its compositor disabled while Compton provides the GLX compositor
 - Compton showed effectively zero settled idle CPU cost
+
+The Unity session was separately confirmed to use direct Intel/Mesa hardware acceleration with no llvmpipe fallback. A full Unity-specific performance baseline has not been run and is not currently required because no performance problem has been demonstrated.
 
 No generic performance tweaks are accepted or required at this time.
 
@@ -461,9 +610,11 @@ See [`PERFORMANCE-BASELINE.md`](PERFORMANCE-BASELINE.md).
 
 ---
 
-# 11. Current confirmed state
+# 12. Current confirmed state
 
 The reference machine has been tested with:
+
+## MATE
 
 - Debian 13 normal boot to LightDM
 - Xenial MATE login directly on physical X11
@@ -486,9 +637,27 @@ The reference machine has been tested with:
 - a real `SIGCHLD` reaper in the host launcher
 - healthy CPU/GPU/memory/thermal performance baseline
 
+## Unity
+
+- separate fresh `/srv/xenial-unity` root
+- Debian LightDM -> Ubuntu Unity 16.04 login
+- Unity 7/Compiz directly on physical X11
+- native Xenial user-Upstart startup and session D-Bus
+- expected Ambiance/Ubuntu theme assets
+- wallpaper and Appearance/Desktop Background integration
+- no observed Compiz ghosting after the complete accepted theme/default package set was installed
+- populated application/search lenses
+- native Xenial Nautilus desktop/file management
+- automatic host-app mirror visible through `/host-xdg`
+- Debian host applications launching through the existing host-run bridge
+- removable USB media through Xenial GVfs + Debian UDisks2
+- fixed internal volume authentication through Debian polkitd + Debian graphical polkit-mate agent
+- mounted fixed volume visible and browsable in Nautilus
+- direct Intel/Mesa hardware acceleration with no llvmpipe fallback observed
+
 ---
 
-# 12. Maintenance rules
+# 13. Maintenance rules
 
 For future work:
 
@@ -503,5 +672,7 @@ For future work:
 ```
 
 Do not put provisional experiments into canonical setup instructions.
+
+Keep MATE-specific and Unity-specific behavior separate where their native desktop architecture differs. Generalize only infrastructure that has actually proved common, such as the host application mirror/launcher and Debian hardware-facing services.
 
 The latest accepted GitHub files are the source of truth for implementation details. If older handoffs or conversation history disagree with current accepted documentation or observed behavior, prefer the current evidence and documentation.
