@@ -329,6 +329,71 @@ Do not create per-app `StartupWMClass` maps, Electron exceptions, application-sp
 
 Full labeling/matching policy: [`HOST-APP-LABELING.md`](HOST-APP-LABELING.md).
 
+## Unity Host global menu and HUD — accepted universal protocol bridge
+
+The accepted Unity menu/HUD integration is **not** based on per-app fixes.
+
+Debian Host applications remain connected to Debian's user bus:
+
+```text
+unix:path=/run/user/$UID/bus
+```
+
+while Xenial Unity keeps its independent native session bus. The bridge transports supported menu interfaces between those buses without moving the application itself.
+
+Accepted Debian helper files are:
+
+```text
+/usr/local/libexec/maverick_unity_menu.py
+/usr/local/libexec/maverick-unity-menu-bridge
+```
+
+They run under the existing session-scoped `maverick-host-launcher.service`; no new permanent daemon or systemd unit was added.
+
+The bridge supports both of Unity's relevant menu source families:
+
+1. GMenuModel/GActionGroup exposed through standard `_GTK_*` X11 properties, including separate application menu, menubar and `app`, `win`, and `unity` action groups where present.
+2. Legacy `com.canonical.dbusmenu` exporters using `com.canonical.AppMenu.Registrar`.
+
+Traditional GTK3 GtkMenuShell/GtkUIManager applications are covered generically by injecting Debian's `appmenu-gtk3-module` for Unity Host launches:
+
+```text
+GTK_MODULES=appmenu-gtk-module
+UBUNTU_MENUPROXY=1
+```
+
+The real Host process still receives Debian's D-Bus address.
+
+For GMenu sources the helper retrieves the remote GMenu/GAction objects from Debian, constructs a live GTK3 menu model with the correct action prefixes, converts it to DBusMenu, exports a unique per-window DBusMenu object on the Unity bus, and registers the actual XID with Unity's native:
+
+```text
+com.canonical.AppMenu.Registrar.RegisterWindow
+```
+
+For existing DBusMenu applications, the helper transparently proxies their DBusMenu interface onto the Unity bus and uses the same registrar path.
+
+This registrar normalization replaces the superseded `_GTK_UNIQUE_BUS_NAME` rewrite/cache-invalidation design. It removes the first-focus race: supported Host applications must receive their global menu and HUD without switching focus away and back.
+
+The accepted implementation does not use:
+
+- `_GTK_UNIQUE_BUS_NAME` rewriting;
+- `UnregisterWindow` cache-refresh tricks;
+- fake focus changes;
+- direct per-window HUD `AddSources` / `SetWindowContext`; or
+- application-specific menu/HUD rules.
+
+HUD follows the same native AppMenu DBusMenu registration as the global menu, so both features share one generic registration mechanism.
+
+Unity WindowStack `debian-*` application identity is the scope gate for Host windows. The relay does not require an `_BAMF_DESKTOP_FILE` X property to be present; that requirement was proven too strict with Host Caja and removed.
+
+The compatibility rule is protocol-based: any mirrored Host application that exposes a supported GMenu/GAction or DBusMenu interface is eligible. Applications that expose neither protocol remain normal Host applications but do not receive a fabricated menu/HUD.
+
+Representative accepted compatibility includes Blueman Manager, Caja, Chromium, Visual Studio Code, GDebi, GIMP, GUFW, Deskflow, Evolution, Shutter, Synaptic and system-config-printer. This list describes the current inventory; it is not a code whitelist.
+
+Final acceptance included normal Host launches with no focus bounce, with representative testing on Caja, Chromium and Visual Studio Code.
+
+Full protocol design and maintenance rules: [`UNITY-HOST-MENU-HUD.md`](UNITY-HOST-MENU-HUD.md).
+
 ## Correct child handling
 
 Do **not** use:
@@ -639,6 +704,9 @@ See [`PERFORMANCE-BASELINE.md`](PERFORMANCE-BASELINE.md).
 - Debian Host applications launching through the existing bridge
 - final global BAMF matching: authoritative mirrored identity + early real-PID registration + no mirrored `StartupWMClass`
 - duplicate/replacement launcher icons resolved across tested GTK, Electron, wrapper and privileged Host applications
+- accepted universal Host global-menu/HUD protocol bridge for supported GMenu/GAction and DBusMenu exporters
+- supported Host global menus and HUD available on first focus with no focus-switch/cache workaround
+- representative final menu/HUD acceptance with Caja, Chromium and Visual Studio Code
 - removable USB media through Xenial GVfs + Debian UDisks2
 - fixed-volume authentication through Debian polkitd + Debian graphical polkit-mate agent
 - direct Intel/Mesa hardware acceleration with no llvmpipe fallback observed
@@ -662,5 +730,7 @@ For future work:
 Do not put provisional experiments into canonical setup instructions.
 
 Keep MATE-specific and Unity-specific behavior separate where their native desktop architecture differs. Generalize only infrastructure that has actually proved common, such as the Host application mirror/launcher and Debian hardware-facing services.
+
+For Unity Host menu/HUD work, preserve the accepted protocol-based bridge. Do not reintroduce application whitelists, `_GTK_UNIQUE_BUS_NAME` rewriting, focus bouncing, cache-invalidating `UnregisterWindow` tricks, or direct per-app HUD registration.
 
 The latest accepted GitHub files are the source of truth for implementation details. If older handoffs or conversation history disagree with current accepted documentation or observed behavior, prefer the current evidence and documentation.
