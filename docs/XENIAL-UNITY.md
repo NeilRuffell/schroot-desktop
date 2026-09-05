@@ -117,9 +117,7 @@ Never recursively bind all of `/run` into this root.
 
 # 3. Tested Unity package set
 
-A minimal `unity` install was not sufficient for a normal desktop. The tested shell requires the Ubuntu defaults, themes, lenses and settings integration as well as the core session packages.
-
-Install:
+Install the tested shell/integration set:
 
 ```bash
 sudo chroot /srv/xenial-unity \
@@ -148,14 +146,14 @@ sudo chroot /srv/xenial-unity \
     python
 ```
 
-`ubuntu-desktop` was deliberately not used because even with `--no-install-recommends` it pulls a broad Xenial desktop/Xorg payload that the Debian host already owns.
+`ubuntu-desktop` was deliberately not used because it pulls a broad Xenial desktop/Xorg payload that the Debian host already owns.
 
-Important omissions discovered during testing:
+Important tested effects:
 
-- without `light-themes` and `ubuntu-settings`, Unity fell back to Adwaita and Compiz logged missing decoration assets; the result included severe visual corruption/ghosting
-- without `unity-lens-applications`, `unity-lens-files` and `zeitgeist-core`, the Dash application/search experience was incomplete
-- without `unity-control-center`, the desktop context menu lacked the normal **Change Desktop Background** action and Appearance integration
-- `python-minimal` alone is not sufficient for the project `host-run` client; it lacks the Python 2 standard library `json` module. Install the normal `python` package
+- `light-themes` and `ubuntu-settings` restore expected Ubuntu/Unity theming and decoration assets
+- Unity lenses + Zeitgeist restore normal Dash application/search content
+- `unity-control-center` restores Appearance/Desktop Background integration
+- full `python` is required because project `host-run` imports Python 2 `json`; `python-minimal` alone is insufficient
 
 Tested core versions include:
 
@@ -182,13 +180,21 @@ TryExec=unity
 DesktopNames=Unity
 ```
 
-The corresponding GNOME session requires `unity-settings-daemon`, but Unity/Compiz itself is launched through Xenial **user Upstart**. `unity7.conf` starts Compiz on the native `xsession SESSION=ubuntu` event.
+Unity/Compiz itself is launched through Xenial user Upstart. The Debian wrapper must therefore enter Xenial through:
 
-For that reason the Debian wrapper must enter Xenial through `/etc/X11/Xsession`. Directly launching `gnome-session --session=ubuntu` bypasses part of the native startup contract.
+```text
+/etc/X11/Xsession "gnome-session --session=ubuntu"
+```
 
-The inherited Debian LightDM `PATH` did not include `/sbin`, which caused Xenial Upstart jobs to fail to find `initctl` and `upstart-udev-bridge`. The wrapper therefore supplies a complete system path.
+Directly launching `gnome-session --session=ubuntu` bypasses part of the native startup contract.
 
-Unity's Xenial user-Upstart session also creates and owns its own session D-Bus. Do not pass Debian's systemd user-bus address into the Xenial Unity session.
+The inherited Debian LightDM `PATH` did not include `/sbin`, so the accepted wrapper supplies:
+
+```text
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+Unity's Xenial user-Upstart session creates and owns its own session D-Bus. Do not pass Debian's systemd user-bus address into the Xenial Unity session.
 
 ---
 
@@ -206,13 +212,11 @@ export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
 export PULSE_SERVER="unix:/run/user/${UID_NUM}/pulse/native"
 export ICEAUTHORITY="$HOME/.ICEauthority"
 
-# Reproduce the identity of Xenial's native Ubuntu Unity session.
 export DESKTOP_SESSION=ubuntu
 export XDG_SESSION_DESKTOP=ubuntu
 export XDG_CURRENT_DESKTOP=Unity
 export GDMSESSION=ubuntu
 
-# Start the existing Debian host-application bridge for this login only.
 HOST_DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/${UID_NUM}/bus}"
 
 systemctl --user start maverick-host-launcher.service
@@ -224,13 +228,10 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
-# Unity's Xenial user-Upstart session creates and owns its own session D-Bus.
 unset DBUS_SESSION_BUS_ADDRESS
 unset DBUS_SESSION_BUS_PID
 unset DBUS_SESSION_BUS_WINDOWID
 
-# Let Xenial Xsession add its native Ubuntu/GNOME directories around this
-# base path while also exposing mirrored Debian applications and resources.
 unset XDG_CONFIG_DIRS
 export XDG_DATA_DIRS="/host-xdg:/usr/local/share:/usr/share"
 
@@ -246,21 +247,7 @@ trap - EXIT
 exit "$STATUS"
 ```
 
-In the running Unity session, the native Xsession/Upstart path expanded the tested data path to:
-
-```text
-XDG_DATA_DIRS=/usr/share/ubuntu:/usr/share/gnome:/host-xdg:/usr/local/share:/usr/share
-```
-
-The live Compiz environment also confirmed:
-
-```text
-DESKTOP_SESSION=ubuntu
-XDG_CURRENT_DESKTOP=Unity
-DBUS_SESSION_BUS_ADDRESS=unix:abstract=/tmp/dbus-...
-```
-
-Direct rendering was active with the Debian Intel/Mesa stack; no llvmpipe fallback was observed.
+In the live Unity session, Xenial Xsession expands the data path to include native Ubuntu/GNOME directories. The Compiz environment confirmed native Unity identity and a Xenial abstract `/tmp/dbus-*` session bus. Direct Intel/Mesa rendering was active with no llvmpipe fallback observed.
 
 ---
 
@@ -278,7 +265,7 @@ Type=Application
 DesktopNames=Unity
 ```
 
-The outer Debian session identity is `ubuntu-unity-xenial`; the wrapper resets the **inner Xenial** identity to the native `ubuntu` values before entering the root.
+The outer Debian session identity is `ubuntu-unity-xenial`; the wrapper resets the inner Xenial identity to the native `ubuntu` values before entering the root.
 
 ---
 
@@ -290,62 +277,81 @@ The same generated Debian launcher mirror used by MATE is mounted into Unity at:
 /host-xdg/applications
 ```
 
-Mirrored host applications keep the normal project policy:
+Mirrored Host policy:
 
 - unique `debian-` desktop IDs
 - `(Host)` appended to main and localized application names
 - execution through `/usr/local/bin/host-run`
 - desktop-action labels left unchanged
+- `BAMF_DESKTOP_FILE_HINT` added for every generated Host `Exec=`
+- `StartupWMClass=` removed from every generated `debian-*.desktop`
+- current tested mirror forces `StartupNotify=false`
 
-The tested Unity root currently carries the same `host-run` client as the MATE root:
-
-```bash
-sudo install -m 0755 \
-  /srv/xenial/usr/local/bin/host-run \
-  /srv/xenial-unity/usr/local/bin/host-run
-```
-
-The client uses `#!/usr/bin/python` and imports `json`, so the complete Xenial `python` package is part of the accepted Unity integration. `python-minimal` alone caused:
-
-```text
-ImportError: No module named json
-```
-
-After installing `python`, a direct bridge test returned success and Debian GUI applications launched normally from the Unity session.
+The Unity root carries the same `host-run` client as the MATE root.
 
 ## Unity/BAMF launcher matching
 
-Unity uses BAMF to associate running application windows with their launchers. Mirrored host applications intentionally use unique `debian-*` desktop IDs, so the source desktop ID is not preserved.
+The final accepted matching design is **not** based on preserving host `StartupWMClass`.
 
-Testing established this generic rule:
+The duplicate/replacement icon failure was captured directly from BAMF. During a failing Visual Studio Code launch, BAMF created a `Starting=true` Host application object for `debian-code.desktop`, then created a second runtime application when the real X11 window appeared. Unity therefore displayed two launcher objects until the first startup object disappeared.
 
-```text
-source launcher has StartupWMClass
-    -> preserve it; normal BAMF matching works
+Two structural problems caused that behavior:
 
-source launcher lacks StartupWMClass
-    -> prepend BAMF_DESKTOP_FILE_HINT for the mirrored debian-* desktop file
-```
+1. The schroot bridge breaks BAMF's normal launch-PID ancestry because Xenial launches `host-run` while the real Debian GUI process is later spawned by the separate host launcher service.
+2. Copied Debian `StartupWMClass` values can be absent, stale, or case-mismatched and can cause Xenial BAMF to reject an otherwise-correct explicit Host desktop identity.
 
-For the no-`StartupWMClass` case, the generated command uses the path visible inside Xenial:
+Confirmed examples included:
 
 ```text
-BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
+Visual Studio Code:
+  StartupWMClass=Code
+  live WM_CLASS="code", "code"
+
+GIMP 3:
+  StartupWMClass=gimp-3.0
+  live WM_CLASS="gimp", "Gimp"
 ```
 
-Example:
+### Accepted global bridge flow
 
-```ini
-Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop /usr/local/bin/host-run deskflow
+Every mirrored Host launch follows the same path:
+
+```text
+mirrored debian-*.desktop
+        ↓
+BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-*.desktop
+        ↓
+Xenial host-run sends request to Debian launcher
+        ↓
+Debian launcher creates a stopped launch-gate process
+        ↓
+launcher returns the real PID
+        ↓
+Xenial host-run calls:
+org.ayatana.bamf.control.RegisterApplicationForPid
+        ↓
+real PID is registered to the mirrored debian-* desktop file
+        ↓
+host-run sends SIGCONT
+        ↓
+gate execs the real Debian application with the same PID
 ```
 
-Both Xenial `host-run` clients and `/usr/local/libexec/maverick-host-launcher` must include `BAMF_DESKTOP_FILE_HINT` in their environment allow-lists so the value reaches the real Debian process.
+The stopped launch gate prevents a race where a fast application could create its first X11 window before BAMF receives the registration. The Debian launcher retains the real child reaper; `SIGCHLD=SIG_IGN` must not be used.
 
-The test case confirmed the value in the host process environment and eliminated the duplicate/transient Unity launcher behavior for previously affected host applications. Firefox ESR and Synaptic, which already supply `StartupWMClass`, remain unchanged and continue to match through their native metadata.
+BAMF then applies the registered identity through the process ancestry it understands. Testing confirmed the correct `_BAMF_DESKTOP_FILE` on Visual Studio Code and on privileged GUFW after its helper chain detached.
 
-Do not build per-application `StartupWMClass` tables or launcher hacks. This is a conditional rule in the existing generic synchronizer and is inherited automatically by future mirrored host apps.
+### Mirrored `StartupWMClass` is removed globally
 
-The existing `maverick-host-launcher.service` remains session-scoped and is started/stopped by the Unity wrapper. Do not permanently enable it.
+The synchronizer strips `StartupWMClass=` from the main `[Desktop Entry]` of **every** generated `debian-*.desktop` file. This leaves Debian's real desktop files and all Xenial-native launchers untouched.
+
+The reason is architectural: once the bridge explicitly supplies the authoritative `debian-*` desktop identity and real PID, copied `StartupWMClass` is a weaker heuristic that can veto the correct identity. It is therefore removed from the generated Host view rather than repaired per application.
+
+Do not create per-app WM-class maps, Electron exceptions, launcher hacks, or a downstream BAMF source patch for this problem.
+
+The duplicate/replacement launcher behavior was retested successfully across multiple Host application classes, including Visual Studio Code, GIMP, Firefox ESR, Synaptic, GUFW/Firewall Configuration, and ordinary GTK applications. Future mirrored Host applications inherit the same rules automatically through the existing synchronizer.
+
+The existing `maverick-host-launcher.service` remains session-scoped and must not be permanently enabled.
 
 ---
 
@@ -353,13 +359,11 @@ The existing `maverick-host-launcher.service` remains session-scoped and is star
 
 Native Xenial Nautilus/GVfs talks to Debian's UDisks2 through the shared system bus/runtime exposure. USB/removable media works through this path.
 
-Fixed internal volumes may require PolicyKit authentication. The Debian graphical PolicyKit agent must therefore run for the Unity outer session as well as MATE.
+Fixed internal volumes may require PolicyKit authentication. The Debian graphical PolicyKit agent runs for the Unity outer session as well as MATE.
 
 Accepted `/etc/X11/Xsession.d/90custom_maverick-host-services`:
 
 ```sh
-# Debian-side helpers for legacy Xenial desktop sessions.
-
 case "$DESKTOP_SESSION" in
     ubuntu-mate-xenial|ubuntu-unity-xenial)
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
@@ -375,11 +379,11 @@ if [ "$DESKTOP_SESSION" = "ubuntu-mate-xenial" ]; then
 fi
 ```
 
-The host polkit-mate agent may log a warning that `org.gnome.SessionManager` is unavailable on Debian's user bus. In the tested Unity session this warning is harmless: the agent still presents the password dialog, Debian UDisks2 mounts the fixed volume, and the mounted filesystem is browsable in Xenial Nautilus.
+The host polkit-mate agent may log a harmless `org.gnome.SessionManager` warning on Debian's user bus. In the tested Unity session it still presents the password dialog and authorized UDisks2 mounts succeed.
 
-Blueman remains MATE-only in this hook because Unity Bluetooth integration has not yet been separately validated.
+Blueman remains MATE-only until Unity Bluetooth behavior is separately validated.
 
-Do not reintroduce `udiskie`, UDisks1 compatibility hacks, or a Xenial-owned hardware service stack.
+Do not reintroduce `udiskie`, UDisks1 compatibility hacks, or a Xenial-owned hardware-service stack.
 
 ---
 
@@ -391,12 +395,11 @@ The accepted Unity milestone has been tested with:
 - Unity 7/Compiz directly on physical X11 `:0`
 - correct Ambiance/Ubuntu theme assets
 - normal desktop wallpaper and Appearance integration
-- no observed Compiz ghosting after the complete theme/default package set was installed
-- native Xenial Nautilus desktop/file management
 - populated Unity application/search lenses
+- native Xenial Nautilus desktop/file management
 - host application discovery through `/host-xdg`
-- Debian host applications launching through the existing `host-run` bridge
-- correct single-icon Unity launcher association for mirrored host applications, including the generic BAMF hint path for source launchers without `StartupWMClass`
+- Debian Host applications launching through the generic bridge
+- single-icon Unity launcher association across the tested Host application classes using early BAMF PID registration plus global removal of mirrored `StartupWMClass`
 - USB/removable media through Xenial GVfs + Debian UDisks2
 - fixed internal volume authentication through Debian polkitd + Debian graphical polkit-mate agent
 - mounted fixed volumes visible and browsable in Nautilus
@@ -413,9 +416,11 @@ The MATE root remains independent and unchanged by the Unity desktop package set
 - Do not recursively bind all of `/run`.
 - Debian owns hardware-facing services and modern applications.
 - Unity owns its classic Xenial shell and native Nautilus/GVfs user experience.
-- Use the existing generic host-application mirror and launcher; do not add Unity-specific per-app hacks.
-- Preserve source `StartupWMClass` when present; use the generic BAMF desktop-file hint only for mirrored host launchers that lack it.
-- Do not force Debian Caja desktop ownership into Unity unless a future demonstrated problem justifies it.
+- Use the existing generic Host application mirror and launcher; do not add Unity-specific per-app hacks.
+- Every generated `debian-*` mirror uses the authoritative Host/BAMF identity path and removes copied `StartupWMClass`.
+- Register the real Debian launch PID with Xenial BAMF before allowing the gated process to exec the application.
 - Keep the host launcher session-scoped.
+- Do not use `SIGCHLD=SIG_IGN`; keep the real child reaper.
+- Do not force Debian Caja desktop ownership into Unity unless a demonstrated problem justifies it.
 - Do not treat package presence inside Xenial as service ownership.
-- Record only tested fixes in the canonical documentation.
+- Record only tested fixes in canonical documentation.
