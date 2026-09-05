@@ -45,3 +45,7 @@ Accepted project changes are recorded here after they are tested and approved.
 - Extended the Debian graphical PolicyKit helper hook to the outer `ubuntu-unity-xenial` session while leaving Debian Blueman MATE-only for now.
 - Confirmed native Xenial Nautilus/GVfs can mount removable media and a fixed internal volume through Debian UDisks2; the fixed volume produced a Debian graphical PolicyKit password prompt and was mounted and browsable after authorization.
 - Documented the accepted Unity build and integration in `docs/XENIAL-UNITY.md`.
+- Diagnosed Unity duplicate/transient launcher icons for mirrored host applications as a BAMF matching gap affecting source launchers that do not provide `StartupWMClass`; Firefox ESR and Synaptic remained correctly matched through their existing `StartupWMClass` metadata.
+- Added a generic conditional launcher rule: preserve source `StartupWMClass` when present, otherwise prepend `BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop` to the mirrored launcher command.
+- Added `BAMF_DESKTOP_FILE_HINT` to the environment allow-lists in both Xenial `host-run` clients and the Debian host launcher so the hint reaches the real host process.
+- Confirmed the hint in the running Debian Deskflow process and confirmed the previously affected host applications now use a single correct Unity launcher icon. No per-application WM-class table or launcher hack is required.
