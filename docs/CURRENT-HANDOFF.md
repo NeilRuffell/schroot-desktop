@@ -245,6 +245,53 @@ This lets Xenial-native and Debian-host versions of the same application coexist
 
 The Unity root carries the same `host-run` client as the MATE root. The client uses `#!/usr/bin/python` and imports Python 2 `json`; therefore the normal Xenial `python` package is part of the accepted Unity integration. `python-minimal` alone is insufficient.
 
+## Unity Host GTK theme selection
+
+Unity Host GTK3 applications have an independent theme selection through Debian's mirrored **Customize Look and Feel (Host)** (`lxappearance`). Xenial-native applications continue to use the theme selected by Unity Appearance through Xenial's dconf/XSettings state.
+
+Host `lxappearance` writes its selection to:
+
+```text
+~/.config/gtk-3.0/settings.ini
+```
+
+For each request whose `XDG_CURRENT_DESKTOP` contains `Unity`, `/usr/local/libexec/maverick-host-launcher` reads `gtk-theme-name` from that file and exports it as `GTK_THEME` in the real Debian application's environment. `GTK_THEME` has sufficient priority to prevent Unity's XSettings value from replacing the Host selection. The file is read for every launch, so changing the theme affects newly launched Host applications without hard-coding a theme name in the bridge; already-running applications normally require a restart.
+
+The accepted helper is:
+
+```python
+def configure_unity_host_theme(env):
+    settings_path = os.path.join(
+        env.get("HOME", "/"),
+        ".config",
+        "gtk-3.0",
+        "settings.ini",
+    )
+    settings = configparser.ConfigParser(interpolation=None)
+
+    try:
+        with open(settings_path, encoding="utf-8") as stream:
+            settings.read_file(stream)
+        theme = settings.get("Settings", "gtk-theme-name").strip()
+    except (OSError, configparser.Error, KeyError):
+        return
+
+    if theme:
+        env["GTK_THEME"] = theme
+```
+
+with the explicit desktop gate:
+
+```python
+desktops = env.get("XDG_CURRENT_DESKTOP", "").split(":")
+if "Unity" in desktops:
+    configure_unity_host_theme(env)
+```
+
+Host theme discovery remains on Debian's normal theme paths, including the installed `Ambiant-MATE-*` family. The final build does **not** set Host `GTK_DATA_PREFIX` to `/srv/xenial-unity/usr` and does **not** expose Xenial `Ambiance` or `Radiance` below the Host `/usr/share/themes`. Those superseded approaches polluted the Host selector and loaded old Xenial CSS into current Debian applications.
+
+The override is deliberately limited to GTK3. GTK4/libadwaita and custom-rendered application interfaces are not guaranteed to follow it. A missing or invalid Host settings file leaves `GTK_THEME` unset and preserves normal GTK fallback behavior.
+
 ## Unity/BAMF launcher matching — final accepted design
 
 The earlier conditional rule — preserve source `StartupWMClass` and add a BAMF hint only when it is missing — is **superseded** and is not part of the current build.
@@ -703,6 +750,7 @@ See [`PERFORMANCE-BASELINE.md`](PERFORMANCE-BASELINE.md).
 - native Xenial Nautilus desktop/file management
 - automatic Host application mirror visible through `/host-xdg`
 - Debian Host applications launching through the existing bridge
+- independent Unity Host GTK3 theme selection through **Customize Look and Feel (Host)**, with Debian themes kept separate from Xenial Appearance
 - final global BAMF matching: authoritative mirrored identity + early real-PID registration + no mirrored `StartupWMClass`
 - duplicate/replacement launcher icons resolved across tested GTK, Electron, wrapper and privileged Host applications
 - accepted universal Host global-menu/HUD protocol bridge for supported GMenu/GAction and DBusMenu exporters
@@ -731,6 +779,8 @@ For future work:
 Do not put provisional experiments into canonical setup instructions.
 
 Keep MATE-specific and Unity-specific behavior separate where their native desktop architecture differs. Generalize only infrastructure that has actually proved common, such as the Host application mirror/launcher and Debian hardware-facing services.
+
+For Unity Host theming, preserve the `lxappearance`-file-to-`GTK_THEME` launcher path. Do not point Host `GTK_DATA_PREFIX` at the Xenial root or expose Xenial theme directories in the Host theme catalog.
 
 For Unity Host menu/HUD work, preserve the accepted protocol-based bridge. Do not reintroduce application whitelists, `_GTK_UNIQUE_BUS_NAME` rewriting, focus bouncing, cache-invalidating `UnregisterWindow` tricks, or direct per-app HUD registration.
 

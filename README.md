@@ -70,6 +70,7 @@ The reference system is working with:
 - `(Host)` suffixes also preserved in Debian Caja `Open With` and file-context application menus through a private Caja XDG application view
 - simultaneous Debian-host and Xenial-native MIME handlers in host Caja, with Xenial entries launched back into the existing Xenial MATE session through `xenial-run`
 - coexistence of Xenial-native and Debian-host versions of the same application
+- independent GTK3 theme selection for Unity Host applications through **Customize Look and Feel (Host)**, without exposing Xenial's incompatible Ambiance/Radiance assets in the Host theme catalog
 - generic Unity global-menu/HUD integration for Host applications that expose supported GMenu/GAction or DBusMenu interfaces, with no per-app whitelist or focus-switch workaround
 - XSMP/ICE integration for the established MATE host-app path
 - systemd cgroup cleanup as the fallback for non-XSMP host applications
@@ -120,6 +121,7 @@ The handoff is the canonical technical checkpoint and is updated only after a tr
 12. Keep the host launcher session-scoped rather than permanently enabled.
 13. Treat package presence inside a Xenial root separately from runtime service ownership; Debian remains responsible for modern hardware-facing daemons.
 14. In Unity, bridge supported menu protocols generically rather than adding per-app global-menu or HUD fixes.
+15. Keep Unity Host GTK theming independent: use the Host `lxappearance` setting through the launcher, and do not expose Xenial theme directories to Debian applications.
 
 ## Security note
 

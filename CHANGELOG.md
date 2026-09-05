@@ -4,6 +4,11 @@ Accepted project changes are recorded here after they are tested and approved.
 
 ## 2026-09-05
 
+- Added independent GTK3 theme selection for Unity Host applications through Debian's mirrored **Customize Look and Feel (Host)** (`lxappearance`).
+- Changed the Host launcher to read `gtk-theme-name` from `~/.config/gtk-3.0/settings.ini` for Unity requests and export it as `GTK_THEME`, giving the Host selection precedence over Xenial Unity's XSettings theme while leaving Xenial-native applications unchanged.
+- Kept Host theme discovery on Debian's normal theme paths, allowing the installed `Ambiant-MATE-*` family to appear in `lxappearance`.
+- Removed the superseded Xenial theme exposure experiment. The final design does not set `GTK_DATA_PREFIX` to `/srv/xenial-unity/usr` and does not link Xenial `Ambiance` or `Radiance` into `/usr/share/themes`; those Xenial GTK assets are not sufficiently compatible with current Host GTK applications and must not appear in the Host selector.
+- Scoped the Host theme override explicitly to `XDG_CURRENT_DESKTOP=Unity`, preserving the established MATE Host-launch path. GTK4/libadwaita and applications with custom rendering remain outside this GTK3 compatibility mechanism.
 - Removed generated unprefixed `Hidden=true` host-shadow launchers. They could mask native Xenial applications with the same desktop-file ID because `/host-xdg` has higher XDG lookup priority; observed cases included Synaptic and Simple Scan in Unity.
 - Established that the shared Xenial application mirror contains only uniquely prefixed `debian-*.desktop` Host launchers. Native and Host applications now coexist by default, while explicit per-user `Hidden=true` overrides remain available for user-controlled hiding.
 - Added the accepted generic Unity Host global-menu/HUD protocol bridge.
