@@ -237,6 +237,8 @@ main Name=           -> append " (Host)"
 localized Name[]=    -> append " (Host)"
 desktop-action Name= -> preserve
 Exec=                -> wrap with host-run
+StartupWMClass       -> preserve when supplied by source
+if no StartupWMClass -> prepend BAMF_DESKTOP_FILE_HINT for the mirrored debian-* file
 TryExec=             -> remove
 DBusActivatable=     -> force false
 OnlyShowIn=          -> remove
@@ -246,6 +248,43 @@ NotShowIn=           -> remove
 This lets Xenial-native and Debian-host versions of the same application coexist without silently replacing each other.
 
 The Unity root currently carries the same `host-run` client as the MATE root. The client uses `#!/usr/bin/python` and imports Python 2 `json`; therefore the normal Xenial `python` package is part of the accepted Unity integration. `python-minimal` alone is insufficient and produced `ImportError: No module named json`.
+
+## Unity/BAMF launcher matching
+
+Unity uses BAMF to associate a running application with the `.desktop` launcher that owns it. Testing showed that host launchers which already provide `StartupWMClass` match correctly after mirroring, while some source launchers without `StartupWMClass` can produce a temporary launcher icon plus a separate running-app icon because the project intentionally changed the desktop ID to `debian-*`.
+
+The accepted generic fix is conditional:
+
+```text
+source has StartupWMClass
+    -> preserve it; no BAMF hint added
+
+source lacks StartupWMClass
+    -> generated Exec prepends:
+       BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-<original>.desktop
+```
+
+The path is the mirrored desktop-file path visible inside Xenial, where Unity/BAMF runs.
+
+Example:
+
+```ini
+Exec=/usr/bin/env BAMF_DESKTOP_FILE_HINT=/host-xdg/applications/debian-org.deskflow.deskflow.desktop /usr/local/bin/host-run deskflow
+```
+
+The environment is filtered by the bridge, so `BAMF_DESKTOP_FILE_HINT` must be present in the allow-lists of:
+
+```text
+/srv/xenial/usr/local/bin/host-run
+/srv/xenial-unity/usr/local/bin/host-run
+/usr/local/libexec/maverick-host-launcher
+```
+
+The hint was confirmed in the real Debian Deskflow process environment. After applying the generic rule, previously affected host applications tested in Unity used one correct launcher icon. Firefox ESR and Synaptic, which already provide `StartupWMClass`, remained on their native matching path and were unchanged.
+
+Do not create per-app `StartupWMClass` maps or app-specific launcher fixes for this class of problem. The conditional BAMF rule belongs in the generic synchronizer and is inherited automatically by future mirrored host apps.
+
+Full labeling/matching policy: [`HOST-APP-LABELING.md`](HOST-APP-LABELING.md).
 
 ## Correct child handling
 
@@ -650,6 +689,8 @@ The reference machine has been tested with:
 - native Xenial Nautilus desktop/file management
 - automatic host-app mirror visible through `/host-xdg`
 - Debian host applications launching through the existing host-run bridge
+- generic BAMF launcher matching: preserve source `StartupWMClass`, otherwise forward `BAMF_DESKTOP_FILE_HINT` for the mirrored `debian-*` desktop file
+- previously affected host apps now associate with one correct Unity launcher icon without per-app WM-class rules
 - removable USB media through Xenial GVfs + Debian UDisks2
 - fixed internal volume authentication through Debian polkitd + Debian graphical polkit-mate agent
 - mounted fixed volume visible and browsable in Nautilus
