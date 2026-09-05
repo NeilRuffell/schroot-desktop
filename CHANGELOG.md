@@ -31,3 +31,17 @@ Accepted project changes are recorded here after they are tested and approved.
 - Added generic `/usr/local/bin/xenial-run`, which locates the already-running Xenial MATE schroot session from the live `mate-panel` process, imports its graphical/session environment, and launches Xenial commands with `schroot --run-session`.
 - Confirmed the dual-handler case with GDebi: `gdebi.desktop` remains the Debian-host handler labeled `(Host)`, while `xenial-gdebi.desktop` exposes the Xenial-native installer for the same `application/vnd.debian.binary-package` MIME type.
 - Confirmed both host and Xenial GDebi choices are visible again in Debian Caja's `.deb` `Open With` menu.
+- Added a separate fresh Xenial Unity root at `/srv/xenial-unity`, using its own `xenial-unity-desktop` schroot profile while continuing to share `/home` and matching UID/GID values.
+- Confirmed Xenial Unity 7 runs directly on the same physical X11 `:0` display through Debian LightDM/Xorg without a VM, nested X server, or remote desktop layer.
+- Established the native Unity startup contract through Xenial `/etc/X11/Xsession` and Xenial user Upstart rather than launching `gnome-session` directly.
+- Added a complete system `PATH` to the Unity wrapper so Xenial Upstart can find `/sbin/initctl` and `upstart-udev-bridge` under Debian LightDM.
+- Kept Unity's native Xenial user-Upstart D-Bus separate from Debian's systemd user bus; the live Compiz environment confirmed the expected native Unity session identity and abstract Xenial session bus.
+- Confirmed hardware-accelerated Intel/Mesa rendering in the live Unity session with no llvmpipe fallback.
+- Corrected the initially under-complete Unity package set by adding `ubuntu-settings`, `light-themes`, `unity-lens-applications`, `unity-lens-files`, `zeitgeist-core`, `iso-codes`, and `unity-control-center`; this restored normal Ambiance theming, eliminated observed Compiz ghosting, populated the Dash, and restored Appearance/Desktop Background integration.
+- Kept native Xenial Nautilus as the Unity desktop/file manager instead of applying the MATE-specific Debian Caja takeover.
+- Extended the existing `/host-xdg` launcher mirror into Unity and reused the same session-scoped `maverick-host-launcher.service` rather than creating a Unity-specific bridge.
+- Installed the normal Xenial `python` package in the Unity root because `host-run` imports Python 2 `json`; `python-minimal` alone produced `ImportError: No module named json`.
+- Confirmed the Unity `host-run` path reaches the Debian launcher successfully and launches Debian GUI applications from the Unity session.
+- Extended the Debian graphical PolicyKit helper hook to the outer `ubuntu-unity-xenial` session while leaving Debian Blueman MATE-only for now.
+- Confirmed native Xenial Nautilus/GVfs can mount removable media and a fixed internal volume through Debian UDisks2; the fixed volume produced a Debian graphical PolicyKit password prompt and was mounted and browsable after authorization.
+- Documented the accepted Unity build and integration in `docs/XENIAL-UNITY.md`.
