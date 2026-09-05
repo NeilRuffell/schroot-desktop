@@ -4,6 +4,8 @@ Accepted project changes are recorded here after they are tested and approved.
 
 ## 2026-09-05
 
+- Removed generated unprefixed `Hidden=true` host-shadow launchers. They could mask native Xenial applications with the same desktop-file ID because `/host-xdg` has higher XDG lookup priority; observed cases included Synaptic and Simple Scan in Unity.
+- Established that the shared Xenial application mirror contains only uniquely prefixed `debian-*.desktop` Host launchers. Native and Host applications now coexist by default, while explicit per-user `Hidden=true` overrides remain available for user-controlled hiding.
 - Added the accepted generic Unity Host global-menu/HUD protocol bridge.
 - Kept real Debian Host applications on Debian's user bus while bridging their menu interfaces to the native Xenial Unity session bus.
 - Added support for both Unity-relevant menu families: GMenuModel/GActionGroup via standard `_GTK_*` X11 properties and legacy `com.canonical.dbusmenu` via `com.canonical.AppMenu.Registrar`.

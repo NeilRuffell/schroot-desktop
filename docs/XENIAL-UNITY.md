@@ -286,8 +286,11 @@ Mirrored Host policy:
 - `BAMF_DESKTOP_FILE_HINT` added for every generated Host `Exec=`
 - `StartupWMClass=` removed from every generated `debian-*.desktop`
 - current tested mirror forces `StartupNotify=false`
+- no unprefixed `Hidden=true` shadow launchers
 
 The Unity root carries the same `host-run` client as the MATE root.
+
+The no-shadow rule is required because `/host-xdg` is searched before Xenial's normal `/usr/share/applications` directory. An unprefixed shadow with the same desktop-file ID would suppress the native Xenial application. With only `debian-*` Host IDs, native and Host versions remain visible independently; users may hide either one with a normal per-user desktop override.
 
 ## Unity/BAMF launcher matching
 

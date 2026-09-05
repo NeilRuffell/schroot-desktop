@@ -66,6 +66,7 @@ The reference system is working with:
 - Debian Blueman applet in the MATE session
 - automatic mirroring of Debian application launchers into Xenial desktops
 - automatic `(Host)` suffixes on all mirrored Debian application names
+- simultaneous visibility of Xenial-native and Debian-host applications, including when both distributions use the same original desktop-file ID
 - `(Host)` suffixes also preserved in Debian Caja `Open With` and file-context application menus through a private Caja XDG application view
 - simultaneous Debian-host and Xenial-native MIME handlers in host Caja, with Xenial entries launched back into the existing Xenial MATE session through `xenial-run`
 - coexistence of Xenial-native and Debian-host versions of the same application
@@ -114,10 +115,11 @@ The handoff is the canonical technical checkpoint and is updated only after a tr
 7. Install modern applications on Debian, not inside Xenial, unless there is a specific reason otherwise.
 8. Mirrored host launchers use distinct desktop IDs so they cannot silently replace Xenial-native launchers.
 9. Every mirrored Debian application is visibly suffixed with `(Host)` so the execution side is always unambiguous.
-10. Debian's real `.desktop` files remain untouched; generated XDG views are used where desktop-specific labeling or MIME integration is required.
-11. Keep the host launcher session-scoped rather than permanently enabled.
-12. Treat package presence inside a Xenial root separately from runtime service ownership; Debian remains responsible for modern hardware-facing daemons.
-13. In Unity, bridge supported menu protocols generically rather than adding per-app global-menu or HUD fixes.
+10. Do not generate unprefixed `Hidden=true` shadow launchers; native and Host applications coexist unless a user explicitly hides or removes one.
+11. Debian's real `.desktop` files remain untouched; generated XDG views are used where desktop-specific labeling or MIME integration is required.
+12. Keep the host launcher session-scoped rather than permanently enabled.
+13. Treat package presence inside a Xenial root separately from runtime service ownership; Debian remains responsible for modern hardware-facing daemons.
+14. In Unity, bridge supported menu protocols generically rather than adding per-app global-menu or HUD fixes.
 
 ## Security note
 

@@ -321,6 +321,7 @@ Xenial desktop mirror:
   NoDisplay=true       -> preserve
   Hidden=true          -> preserve
   Categories           -> preserve
+  unprefixed shadows   -> never generate
 
 Host-run / Debian launcher bridge:
   BAMF_DESKTOP_FILE_HINT -> forward/use as mirrored desktop identity
@@ -344,5 +345,7 @@ Host Caja Xenial entries:
   DBusActivatable=     -> force false when present
   MimeType=            -> preserve
 ```
+
+The shared Xenial desktop mirror contains only uniquely prefixed `debian-*.desktop` Host entries. It does not create unprefixed `Hidden=true` shadow files. A higher-priority shadow with an ID such as `simple-scan.desktop` or `synaptic.desktop` would mask the native Xenial entry of the same ID in Unity and MATE. Users can still hide either side independently with a matching `Hidden=true` override in `~/.local/share/applications`.
 
 The host-label view, global Unity/BAMF launcher matching, and dual Debian/Xenial MIME-handler behavior were tested successfully on the reference system on 2026-09-04.

@@ -238,9 +238,10 @@ TryExec=             -> remove
 DBusActivatable=     -> force false
 OnlyShowIn=          -> remove
 NotShowIn=           -> remove
+unprefixed shadows  -> never generate
 ```
 
-This lets Xenial-native and Debian-host versions of the same application coexist without silently replacing each other.
+This lets Xenial-native and Debian-host versions of the same application coexist without silently replacing each other. The mirror must not create unprefixed `Hidden=true` tombstones: because `/host-xdg` precedes the native application directory, such a file would mask a Xenial launcher with the same desktop-file ID. Hiding remains an explicit per-user policy through `~/.local/share/applications`.
 
 The Unity root carries the same `host-run` client as the MATE root. The client uses `#!/usr/bin/python` and imports Python 2 `json`; therefore the normal Xenial `python` package is part of the accepted Unity integration. `python-minimal` alone is insufficient.
 
