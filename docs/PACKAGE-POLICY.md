@@ -7,10 +7,12 @@ packages.
 
 ## Debian host
 
-`packages/host-integration.txt` contains only packages directly required by the
-desktop bridge: schroot and LightDM integration, Caja/GVfs, PolicyKit and
-Blueman helpers, Python/GObject bindings, appmenu/DBusMenu support, X11 property
-inspection, and desktop-database maintenance.
+`packages/host-common.txt` contains the shared schroot, LightDM, PolicyKit,
+Python, D-Bus, and desktop-database dependencies. `packages/host-mate.txt` adds
+only Caja/GVfs and Blueman integration; `packages/host-unity.txt` adds only the
+GObject, appmenu/DBusMenu, X11-property, and Host-theme dependencies used by
+Unity. Selecting one desktop therefore does not install the other desktop's
+host-side packages.
 
 Modern browsers, mail clients, office suites, development tools, and media
 applications are deliberately not listed. Users install those on Debian and the

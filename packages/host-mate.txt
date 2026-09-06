@@ -1,0 +1,6 @@
+# Debian host packages used only by the MATE integration.
+blueman
+caja
+gvfs
+gvfs-backends
+gvfs-fuse

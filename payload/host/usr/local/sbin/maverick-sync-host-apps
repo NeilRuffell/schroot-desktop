@@ -218,8 +218,8 @@ if udb.exists():
 # BEGIN XENIAL CAJA APPLICATION VIEW
 
 XENIAL_CAJA_SOURCES = [
-    Path("/srv/xenial/usr/share/applications"),
-    Path("/srv/xenial/usr/local/share/applications"),
+    Path("@MATE_ROOT@/usr/share/applications"),
+    Path("@MATE_ROOT@/usr/local/share/applications"),
 ]
 
 xenial_caja_wanted = set()

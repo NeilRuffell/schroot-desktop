@@ -1,0 +1,8 @@
+# Debian host packages used only by the Unity integration.
+appmenu-gtk3-module
+gir1.2-dbusmenu-glib-0.4
+gir1.2-dbusmenu-gtk3-0.4
+gir1.2-gtk-3.0
+lxappearance
+python3-gi
+x11-utils

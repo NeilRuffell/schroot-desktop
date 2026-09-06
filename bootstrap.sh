@@ -4,6 +4,7 @@ set -euo pipefail
 PROGRAM=${0##*/}
 REPO_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 COMMAND=plan
+DESKTOP=both
 APPLY=false
 INSTALL_HOST_PACKAGES=false
 TARGET_USER=${SUDO_USER:-${USER:-}}
@@ -16,12 +17,13 @@ usage() {
     cat <<EOF
 Usage: $PROGRAM [plan|create] [OPTIONS]
 
-Bootstrap fresh, separate Ubuntu 16.04 MATE and Unity roots. Existing roots
-are never overwritten. Run install.sh afterward to deploy host integration.
+Bootstrap fresh Ubuntu 16.04 MATE and/or Unity roots. Existing roots are never
+overwritten. Run install.sh afterward to deploy host integration.
 
 Options:
   --apply                    Required with create
   --target-user USER         Desktop account (default: SUDO_USER/current user)
+  --desktop CHOICE           mate, unity, or both (default: both)
   --mate-root PATH           New MATE root (default: /srv/xenial)
   --unity-root PATH          New Unity root (default: /srv/xenial-unity)
   --mirror URL               Xenial archive mirror
@@ -63,6 +65,11 @@ while (($#)); do
             TARGET_USER=$2
             shift
             ;;
+        --desktop)
+            (($# >= 2)) || die "--desktop requires a value"
+            DESKTOP=$2
+            shift
+            ;;
         --mate-root)
             (($# >= 2)) || die "--mate-root requires a value"
             MATE_ROOT=$2
@@ -96,6 +103,16 @@ done
 
 [[ $TARGET_USER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] ||
     die "unsupported target-user syntax: $TARGET_USER"
+[[ $DESKTOP == mate || $DESKTOP == unity || $DESKTOP == both ]] ||
+    die "--desktop must be mate, unity, or both"
+WANT_MATE=false
+WANT_UNITY=false
+if [[ $DESKTOP == mate || $DESKTOP == both ]]; then
+    WANT_MATE=true
+fi
+if [[ $DESKTOP == unity || $DESKTOP == both ]]; then
+    WANT_UNITY=true
+fi
 [[ $MATE_ROOT = /* && $MATE_ROOT != / ]] || die "invalid MATE root"
 [[ $UNITY_ROOT = /* && $UNITY_ROOT != / ]] || die "invalid Unity root"
 [[ $MATE_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsupported MATE root path"
@@ -128,21 +145,39 @@ show_plan() {
     cat <<EOF
 Schroot Desktop bootstrap plan
   target user: $TARGET_USER ($TARGET_UID:$TARGET_GID)
+  desktop:     $DESKTOP
   shared home: $TARGET_HOME
-  MATE root:   $MATE_ROOT
-  Unity root:  $UNITY_ROOT
+EOF
+    if [[ $WANT_MATE == true ]]; then
+        printf '  MATE root:   %s\n' "$MATE_ROOT"
+    fi
+    if [[ $WANT_UNITY == true ]]; then
+        printf '  Unity root:  %s\n' "$UNITY_ROOT"
+    fi
+    cat <<EOF
   mirror:      $MIRROR
   locale:      $TARGET_LOCALE
   architecture: amd64
 
-The operation creates two fresh roots and never overwrites an existing path.
+The operation creates the selected fresh root(s) and never overwrites an existing path.
 Package counts:
   common:           ${#COMMON_PACKAGES[@]}
-  MATE:             ${#MATE_PACKAGES[@]}
-  Unity core:       ${#UNITY_PACKAGES[@]}
-  Unity essentials: ${#UNITY_ESSENTIALS[@]}
 EOF
-    for root in "$MATE_ROOT" "$UNITY_ROOT"; do
+    if [[ $WANT_MATE == true ]]; then
+        printf '  MATE:             %s\n' "${#MATE_PACKAGES[@]}"
+    fi
+    if [[ $WANT_UNITY == true ]]; then
+        printf '  Unity core:       %s\n' "${#UNITY_PACKAGES[@]}"
+        printf '  Unity essentials: %s\n' "${#UNITY_ESSENTIALS[@]}"
+    fi
+    local roots=()
+    if [[ $WANT_MATE == true ]]; then
+        roots+=("$MATE_ROOT")
+    fi
+    if [[ $WANT_UNITY == true ]]; then
+        roots+=("$UNITY_ROOT")
+    fi
+    for root in "${roots[@]}"; do
         if [[ -e $root ]]; then
             echo "  BLOCKED existing path: $root"
         else
@@ -155,8 +190,12 @@ show_plan
 [[ $COMMAND == create ]] || exit 0
 [[ $APPLY == true ]] || die "create is disabled unless --apply is supplied"
 [[ $EUID == 0 ]] || die "create must be run as root"
-[[ ! -e $MATE_ROOT ]] || die "refusing existing MATE root: $MATE_ROOT"
-[[ ! -e $UNITY_ROOT ]] || die "refusing existing Unity root: $UNITY_ROOT"
+if [[ $WANT_MATE == true ]]; then
+    [[ ! -e $MATE_ROOT ]] || die "refusing existing MATE root: $MATE_ROOT"
+fi
+if [[ $WANT_UNITY == true ]]; then
+    [[ ! -e $UNITY_ROOT ]] || die "refusing existing Unity root: $UNITY_ROOT"
+fi
 
 BOOTSTRAP_HOST_MISSING=()
 for package in debootstrap ubuntu-keyring; do
@@ -228,21 +267,25 @@ configure_root() {
     echo "Configured $desktop root: $root"
 }
 
-echo "Bootstrapping MATE root..."
-debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
-    xenial "$MATE_ROOT" "$MIRROR"
-configure_root "$MATE_ROOT" MATE \
-    "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
+if [[ $WANT_MATE == true ]]; then
+    echo "Bootstrapping MATE root..."
+    debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
+        xenial "$MATE_ROOT" "$MIRROR"
+    configure_root "$MATE_ROOT" MATE \
+        "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
+fi
 
-echo "Bootstrapping Unity root..."
-debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
-    xenial "$UNITY_ROOT" "$MIRROR"
-configure_root "$UNITY_ROOT" Unity \
-    "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}" "${UNITY_ESSENTIALS[@]}"
+if [[ $WANT_UNITY == true ]]; then
+    echo "Bootstrapping Unity root..."
+    debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
+        xenial "$UNITY_ROOT" "$MIRROR"
+    configure_root "$UNITY_ROOT" Unity \
+        "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}" "${UNITY_ESSENTIALS[@]}"
+fi
 
 cat <<EOF
 
 Bootstrap complete. The roots are not active yet.
 Next run:
-  sudo $REPO_DIR/install.sh install --target-user $TARGET_USER --install-packages
+  sudo $REPO_DIR/install.sh install --desktop $DESKTOP --target-user $TARGET_USER --install-packages
 EOF

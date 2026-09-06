@@ -2,10 +2,14 @@
 
 The installer has two deliberately separate layers:
 
-- `bootstrap.sh` creates fresh MATE and Unity Xenial roots and installs their
-  curated package manifests.
+- `bootstrap.sh` creates the selected fresh MATE and/or Unity Xenial roots and
+  installs their curated package manifests.
 - `install.sh` installs or updates the version-controlled integration around
   existing roots.
+
+Both layers accept `--desktop mate`, `--desktop unity`, or `--desktop both`.
+`both` is the default. Single-desktop installations validate, create, package,
+and register only the selected desktop.
 
 The installer is deliberately staged this way: host integration can be made
 idempotent and compared with the working reference machine before automating
@@ -81,6 +85,16 @@ On a new Debian 13 machine where neither target root exists:
 sudo ./bootstrap.sh create --apply --install-host-packages
 sudo ./install.sh install --install-packages
 ```
+
+To install only one desktop, use the same selection for both phases:
+
+```bash
+sudo ./bootstrap.sh create --apply --install-host-packages --desktop mate
+sudo ./install.sh install --install-packages --desktop mate
+```
+
+Replace `mate` with `unity` when desired. The archive URL is built into the
+scripts; normal installations do not supply it on the command line.
 
 Bootstrap refuses to overwrite either root path. It verifies that the Xenial
 release file exists before invoking debootstrap, retains APT signature

@@ -113,7 +113,7 @@ documented in:
 
 - [`docs/INSTALLER.md`](docs/INSTALLER.md)
 
-Portable host, MATE, Unity-core, and Unity-essential package selections live in
+Portable host-common, host-desktop, MATE, Unity-core, and Unity-essential package selections live in
 [`packages/`](packages/). These are curated project inputs rather than a dump of
 the reference machine's installed-package database.
 

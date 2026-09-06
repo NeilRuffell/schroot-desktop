@@ -4,6 +4,7 @@ set -euo pipefail
 PROGRAM=${0##*/}
 REPO_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 COMMAND=check
+DESKTOP=both
 TARGET_USER=${SUDO_USER:-${USER:-}}
 MATE_ROOT=/srv/xenial
 UNITY_ROOT=/srv/xenial-unity
@@ -13,6 +14,9 @@ INSTALL_PACKAGES=false
 BACKUP_DIR=
 TEMP_DIR=
 
+HOST_COMMON_PACKAGES=()
+HOST_MATE_PACKAGES=()
+HOST_UNITY_PACKAGES=()
 HOST_PACKAGES=()
 COMMON_PACKAGES=()
 MATE_PACKAGES=()
@@ -38,6 +42,7 @@ This installer does not bootstrap the Xenial root filesystems.
 
 Options:
   --target-user USER       Desktop account (default: SUDO_USER/current user)
+  --desktop CHOICE         mate, unity, or both (default: both)
   --mate-root PATH         Existing MATE root (default: /srv/xenial)
   --unity-root PATH        Existing Unity root (default: /srv/xenial-unity)
   --mirror URL             Xenial archive mirror
@@ -71,6 +76,11 @@ while (($#)); do
         --target-user)
             (($# >= 2)) || die "--target-user requires a value"
             TARGET_USER=$2
+            shift
+            ;;
+        --desktop)
+            (($# >= 2)) || die "--desktop requires a value"
+            DESKTOP=$2
             shift
             ;;
         --mate-root)
@@ -108,6 +118,16 @@ done
 [[ -n $TARGET_USER ]] || die "target user is required"
 [[ $TARGET_USER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] ||
     die "unsupported target-user syntax: $TARGET_USER"
+[[ $DESKTOP == mate || $DESKTOP == unity || $DESKTOP == both ]] ||
+    die "--desktop must be mate, unity, or both"
+WANT_MATE=false
+WANT_UNITY=false
+if [[ $DESKTOP == mate || $DESKTOP == both ]]; then
+    WANT_MATE=true
+fi
+if [[ $DESKTOP == unity || $DESKTOP == both ]]; then
+    WANT_UNITY=true
+fi
 [[ $MATE_ROOT = /* && $MATE_ROOT != / ]] || die "invalid MATE root: $MATE_ROOT"
 [[ $UNITY_ROOT = /* && $UNITY_ROOT != / ]] || die "invalid Unity root: $UNITY_ROOT"
 [[ $MATE_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsupported MATE root path"
@@ -115,11 +135,20 @@ done
 [[ $MATE_ROOT != "$UNITY_ROOT" ]] || die "MATE and Unity roots must be different"
 [[ $MIRROR =~ ^https?://[A-Za-z0-9._:/-]+$ ]] || die "unsupported mirror URL"
 
-read_packages "$REPO_DIR/packages/host-integration.txt" HOST_PACKAGES
+read_packages "$REPO_DIR/packages/host-common.txt" HOST_COMMON_PACKAGES
+read_packages "$REPO_DIR/packages/host-mate.txt" HOST_MATE_PACKAGES
+read_packages "$REPO_DIR/packages/host-unity.txt" HOST_UNITY_PACKAGES
 read_packages "$REPO_DIR/packages/chroot-common.txt" COMMON_PACKAGES
 read_packages "$REPO_DIR/packages/mate-core.txt" MATE_PACKAGES
 read_packages "$REPO_DIR/packages/unity-core.txt" UNITY_PACKAGES
 read_packages "$REPO_DIR/packages/unity-essentials.txt" UNITY_PACKAGES
+HOST_PACKAGES=("${HOST_COMMON_PACKAGES[@]}")
+if [[ $WANT_MATE == true ]]; then
+    HOST_PACKAGES+=("${HOST_MATE_PACKAGES[@]}")
+fi
+if [[ $WANT_UNITY == true ]]; then
+    HOST_PACKAGES+=("${HOST_UNITY_PACKAGES[@]}")
+fi
 
 command -v getent >/dev/null || die "getent is required"
 USER_RECORD=$(getent passwd "$TARGET_USER") || die "unknown user: $TARGET_USER"
@@ -151,8 +180,8 @@ validate_root() {
         die "$TARGET_USER must be UID:GID $TARGET_UID:$TARGET_GID in $label root"
 }
 
-validate_root MATE "$MATE_ROOT"
-validate_root Unity "$UNITY_ROOT"
+[[ $WANT_MATE == false ]] || validate_root MATE "$MATE_ROOT"
+[[ $WANT_UNITY == false ]] || validate_root Unity "$UNITY_ROOT"
 
 missing_packages=()
 for package in "${HOST_PACKAGES[@]}"; do
@@ -177,10 +206,14 @@ missing_root_packages() {
 
 MATE_MISSING=()
 UNITY_MISSING=()
-missing_root_packages "$MATE_ROOT" MATE_MISSING \
-    "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
-missing_root_packages "$UNITY_ROOT" UNITY_MISSING \
-    "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}"
+if [[ $WANT_MATE == true ]]; then
+    missing_root_packages "$MATE_ROOT" MATE_MISSING \
+        "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
+fi
+if [[ $WANT_UNITY == true ]]; then
+    missing_root_packages "$UNITY_ROOT" UNITY_MISSING \
+        "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}"
+fi
 
 TEMP_DIR=$(mktemp -d -t schroot-desktop-install.XXXXXXXX)
 
@@ -222,20 +255,8 @@ file_matches() {
     [[ $(stat -c %g "$destination") == "$wanted_gid" ]] || return 1
 }
 
-add_file payload/host/usr/local/bin/xenial-mate-session \
-    /usr/local/bin/xenial-mate-session 0755 root:root
-add_file payload/host/usr/local/bin/xenial-unity-session \
-    /usr/local/bin/xenial-unity-session 0755 root:root
-add_file payload/host/usr/local/bin/xenial-run \
-    /usr/local/bin/xenial-run 0755 root:root
 add_file payload/host/usr/local/libexec/maverick-host-launcher \
     /usr/local/libexec/maverick-host-launcher 0755 root:root
-add_file payload/host/usr/local/libexec/maverick_unity_menu.py \
-    /usr/local/libexec/maverick_unity_menu.py 0644 root:root
-add_file payload/host/usr/local/libexec/maverick-unity-menu-bridge \
-    /usr/local/libexec/maverick-unity-menu-bridge 0755 root:root
-add_file payload/host/usr/local/sbin/maverick-sync-host-apps \
-    /usr/local/sbin/maverick-sync-host-apps 0755 root:root
 add_file payload/host/etc/systemd/system/maverick-host-app-sync.service \
     /etc/systemd/system/maverick-host-app-sync.service 0644 root:root
 add_file payload/host/etc/systemd/system/maverick-host-app-sync.path \
@@ -244,42 +265,64 @@ add_file payload/host/etc/systemd/user/maverick-host-launcher.service \
     /etc/systemd/user/maverick-host-launcher.service 0644 root:root
 add_file payload/host/etc/X11/Xsession.d/90custom_maverick-host-services \
     /etc/X11/Xsession.d/90custom_maverick-host-services 0644 root:root
-add_file payload/host/usr/share/xsessions/ubuntu-mate-xenial.desktop \
-    /usr/share/xsessions/ubuntu-mate-xenial.desktop 0644 root:root
-add_file payload/host/usr/share/xsessions/ubuntu-unity-xenial.desktop \
-    /usr/share/xsessions/ubuntu-unity-xenial.desktop 0644 root:root
-add_file payload/chroot/mate/usr/local/bin/host-run \
-    "$MATE_ROOT/usr/local/bin/host-run" 0755 root:root
-add_file payload/chroot/mate/usr/local/bin/caja \
-    "$MATE_ROOT/usr/local/bin/caja" 0755 root:root
-add_file config/chroot/mate/99-schroot-desktop.gschema.override \
-    "$MATE_ROOT/usr/share/glib-2.0/schemas/99-schroot-desktop.gschema.override" \
-    0644 root:root
-add_file payload/chroot/unity/usr/local/bin/host-run \
-    "$UNITY_ROOT/usr/local/bin/host-run" 0755 root:root
-add_file config/chroot/policy-rc.d \
-    "$MATE_ROOT/usr/sbin/policy-rc.d" 0755 root:root
-add_file config/chroot/policy-rc.d \
-    "$UNITY_ROOT/usr/sbin/policy-rc.d" 0755 root:root
-add_file config/user/debian-caja-desktop.desktop \
-    "$TARGET_HOME/.config/autostart/debian-caja-desktop.desktop" 0664 "$TARGET_UID:$TARGET_GID"
 
 render config/schroot/xenial.conf.in "$TEMP_DIR/xenial.conf"
 render config/schroot/xenial-unity.conf.in "$TEMP_DIR/xenial-unity.conf"
 render config/schroot/xenial-desktop.fstab.in "$TEMP_DIR/fstab"
 render config/chroot/xenial-sources.list.in "$TEMP_DIR/xenial-sources.list"
-add_file "$TEMP_DIR/xenial.conf" /etc/schroot/chroot.d/xenial.conf 0644 root:root
-add_file "$TEMP_DIR/xenial-unity.conf" /etc/schroot/chroot.d/xenial-unity.conf 0644 root:root
-for profile in xenial-desktop xenial-unity-desktop; do
-    add_file "$TEMP_DIR/fstab" "/etc/schroot/$profile/fstab" 0644 root:root
-    add_file config/schroot/copyfiles "/etc/schroot/$profile/copyfiles" 0644 root:root
-    : >"$TEMP_DIR/nssdatabases"
-    add_file "$TEMP_DIR/nssdatabases" "/etc/schroot/$profile/nssdatabases" 0644 root:root
-done
-for root in "$MATE_ROOT" "$UNITY_ROOT"; do
+render payload/host/usr/local/sbin/maverick-sync-host-apps \
+    "$TEMP_DIR/maverick-sync-host-apps"
+add_file "$TEMP_DIR/maverick-sync-host-apps" \
+    /usr/local/sbin/maverick-sync-host-apps 0755 root:root
+: >"$TEMP_DIR/nssdatabases"
+
+if [[ $WANT_MATE == true ]]; then
+    add_file payload/host/usr/local/bin/xenial-mate-session \
+        /usr/local/bin/xenial-mate-session 0755 root:root
+    add_file payload/host/usr/local/bin/xenial-run \
+        /usr/local/bin/xenial-run 0755 root:root
+    add_file payload/host/usr/share/xsessions/ubuntu-mate-xenial.desktop \
+        /usr/share/xsessions/ubuntu-mate-xenial.desktop 0644 root:root
+    add_file payload/chroot/mate/usr/local/bin/host-run \
+        "$MATE_ROOT/usr/local/bin/host-run" 0755 root:root
+    add_file payload/chroot/mate/usr/local/bin/caja \
+        "$MATE_ROOT/usr/local/bin/caja" 0755 root:root
+    add_file config/chroot/mate/99-schroot-desktop.gschema.override \
+        "$MATE_ROOT/usr/share/glib-2.0/schemas/99-schroot-desktop.gschema.override" \
+        0644 root:root
+    add_file config/chroot/policy-rc.d \
+        "$MATE_ROOT/usr/sbin/policy-rc.d" 0755 root:root
+    add_file config/user/debian-caja-desktop.desktop \
+        "$TARGET_HOME/.config/autostart/debian-caja-desktop.desktop" 0664 "$TARGET_UID:$TARGET_GID"
+    add_file "$TEMP_DIR/xenial.conf" /etc/schroot/chroot.d/xenial.conf 0644 root:root
+    add_file "$TEMP_DIR/fstab" /etc/schroot/xenial-desktop/fstab 0644 root:root
+    add_file config/schroot/copyfiles /etc/schroot/xenial-desktop/copyfiles 0644 root:root
+    add_file "$TEMP_DIR/nssdatabases" /etc/schroot/xenial-desktop/nssdatabases 0644 root:root
     add_file "$TEMP_DIR/xenial-sources.list" \
-        "$root/etc/apt/sources.list.d/schroot-desktop.list" 0644 root:root
-done
+        "$MATE_ROOT/etc/apt/sources.list.d/schroot-desktop.list" 0644 root:root
+fi
+
+if [[ $WANT_UNITY == true ]]; then
+    add_file payload/host/usr/local/bin/xenial-unity-session \
+        /usr/local/bin/xenial-unity-session 0755 root:root
+    add_file payload/host/usr/local/libexec/maverick_unity_menu.py \
+        /usr/local/libexec/maverick_unity_menu.py 0644 root:root
+    add_file payload/host/usr/local/libexec/maverick-unity-menu-bridge \
+        /usr/local/libexec/maverick-unity-menu-bridge 0755 root:root
+    add_file payload/host/usr/share/xsessions/ubuntu-unity-xenial.desktop \
+        /usr/share/xsessions/ubuntu-unity-xenial.desktop 0644 root:root
+    add_file payload/chroot/unity/usr/local/bin/host-run \
+        "$UNITY_ROOT/usr/local/bin/host-run" 0755 root:root
+    add_file config/chroot/policy-rc.d \
+        "$UNITY_ROOT/usr/sbin/policy-rc.d" 0755 root:root
+    add_file "$TEMP_DIR/xenial-unity.conf" \
+        /etc/schroot/chroot.d/xenial-unity.conf 0644 root:root
+    add_file "$TEMP_DIR/fstab" /etc/schroot/xenial-unity-desktop/fstab 0644 root:root
+    add_file config/schroot/copyfiles /etc/schroot/xenial-unity-desktop/copyfiles 0644 root:root
+    add_file "$TEMP_DIR/nssdatabases" /etc/schroot/xenial-unity-desktop/nssdatabases 0644 root:root
+    add_file "$TEMP_DIR/xenial-sources.list" \
+        "$UNITY_ROOT/etc/apt/sources.list.d/schroot-desktop.list" 0644 root:root
+fi
 
 differences=0
 for index in "${!SOURCES[@]}"; do
@@ -386,9 +429,19 @@ if ((${#UNITY_MISSING[@]})); then
         "${UNITY_MISSING[@]}"
 fi
 
-/usr/sbin/chroot "$MATE_ROOT" glib-compile-schemas /usr/share/glib-2.0/schemas
+if [[ $WANT_MATE == true ]]; then
+    /usr/sbin/chroot "$MATE_ROOT" \
+        glib-compile-schemas /usr/share/glib-2.0/schemas
+fi
 
-for root in "$MATE_ROOT" "$UNITY_ROOT"; do
+SELECTED_ROOTS=()
+if [[ $WANT_MATE == true ]]; then
+    SELECTED_ROOTS+=("$MATE_ROOT")
+fi
+if [[ $WANT_UNITY == true ]]; then
+    SELECTED_ROOTS+=("$UNITY_ROOT")
+fi
+for root in "${SELECTED_ROOTS[@]}"; do
     install -d -m 0755 "$root/host-xdg/applications" \
         "$root/host-xdg/icons" "$root/host-xdg/pixmaps" "$root/host-xdg/themes"
 done
@@ -400,4 +453,4 @@ systemctl enable --now maverick-host-app-sync.path
 /usr/local/sbin/maverick-sync-host-apps
 
 note "Installation complete. The host launcher user unit was not enabled permanently."
-note "Log in to MATE and Unity separately and run '$PROGRAM check' after validation."
+note "Log in to the selected desktop(s) and run '$PROGRAM check --desktop $DESKTOP' after validation."

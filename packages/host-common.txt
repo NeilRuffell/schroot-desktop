@@ -1,0 +1,7 @@
+# Debian host packages used by either desktop integration.
+dbus-x11
+desktop-file-utils
+lightdm
+mate-polkit
+python3
+schroot
