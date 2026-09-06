@@ -29,6 +29,9 @@ The installer:
 - does not permanently enable the session-scoped host launcher; and
 - installs missing Debian or chroot packages only with the explicit
   `--install-packages` option.
+- installs `sudo`, adds the matching desktop account to its group, and prompts
+  once for a Xenial administrative password when creating a root or repairing a
+  locked/incompatible existing account.
 
 For existing roots, the installer adds a project-owned Xenial source under
 `sources.list.d` and uses only that source for opted-in chroot package work. It
@@ -101,6 +104,21 @@ release file exists before invoking debootstrap, retains APT signature
 verification, prevents package post-install scripts
 from starting system services, creates a locked matching chroot account without
 a private home, and keeps MATE and Unity in separate roots.
+
+The password prompt configures authentication inside Xenial; it cannot reuse a
+cached host `sudo` credential. You may enter the same password as the Debian
+account. An existing usable Xenial password is preserved during updates. Use
+`--reset-chroot-password` with `install.sh install` to replace it explicitly.
+
+`install.sh update` is the supported in-place update operation (and an explicit
+alias of `install`). It checks and updates repository-owned integration files,
+selected package manifests, administrative group membership, and locked account
+state without rebuilding the root or performing an unrestricted distribution
+upgrade:
+
+```bash
+sudo ./install.sh update --install-packages --desktop both
+```
 
 Package selection is defined in `packages/`. The manifests deliberately exclude
 the oversized desktop metapackages, Xenial update/store clients, legacy browsers

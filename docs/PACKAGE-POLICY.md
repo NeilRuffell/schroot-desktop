@@ -21,7 +21,8 @@ host-application synchronizer exposes them to both legacy desktops.
 ## Common Xenial layer
 
 `packages/chroot-common.txt` provides certificates, locale generation, session
-D-Bus support, and Python 2 for the Xenial `host-run` client.
+D-Bus support, Python 2 for the Xenial `host-run` client, and `sudo` for the
+matching administrative desktop account.
 
 ## Unity
 

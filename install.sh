@@ -11,8 +11,11 @@ UNITY_ROOT=/srv/xenial-unity
 MIRROR=http://archive.ubuntu.com/ubuntu/
 DRY_RUN=false
 INSTALL_PACKAGES=false
+FORCE_RESET_CHROOT_PASSWORD=false
 BACKUP_DIR=
 TEMP_DIR=
+CHROOT_PASSWORD=
+CHROOT_PASSWORD_READY=false
 
 HOST_COMMON_PACKAGES=()
 HOST_MATE_PACKAGES=()
@@ -35,7 +38,7 @@ read_packages() {
 
 usage() {
     cat <<EOF
-Usage: $PROGRAM [check|install] [OPTIONS]
+Usage: $PROGRAM [check|install|update] [OPTIONS]
 
 Install the documented Schroot Desktop integration into existing Xenial roots.
 This installer does not bootstrap the Xenial root filesystems.
@@ -48,6 +51,7 @@ Options:
   --mirror URL             Xenial archive mirror
   --dry-run                Show install actions without changing the system
   --install-packages       Install missing host and chroot packages with APT
+  --reset-chroot-password  Prompt for and replace the selected roots' password
   -h, --help               Show this help
 EOF
 }
@@ -72,6 +76,9 @@ while (($#)); do
     case $1 in
         check|install)
             COMMAND=$1
+            ;;
+        update)
+            COMMAND=install
             ;;
         --target-user)
             (($# >= 2)) || die "--target-user requires a value"
@@ -103,6 +110,9 @@ while (($#)); do
             ;;
         --install-packages)
             INSTALL_PACKAGES=true
+            ;;
+        --reset-chroot-password)
+            FORCE_RESET_CHROOT_PASSWORD=true
             ;;
         -h|--help)
             usage
@@ -209,6 +219,26 @@ UNITY_MISSING=()
 if [[ $WANT_MATE == true ]]; then
     missing_root_packages "$MATE_ROOT" MATE_MISSING \
         "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
+fi
+
+MATE_ADMIN_MISSING=false
+UNITY_ADMIN_MISSING=false
+root_user_is_admin() {
+    local root=$1 user_gid sudo_gid members
+    user_gid=$(awk -F: -v user="$TARGET_USER" \
+        '$1 == user {print $4}' "$root/etc/passwd")
+    IFS=: read -r _ _ sudo_gid members < <(
+        awk -F: '$1 == "sudo" {print; exit}' "$root/etc/group"
+    )
+    [[ -n ${sudo_gid:-} ]] || return 1
+    [[ $user_gid == "$sudo_gid" ]] && return 0
+    [[ ,${members:-}, == *,"$TARGET_USER",* ]]
+}
+if [[ $WANT_MATE == true ]] && ! root_user_is_admin "$MATE_ROOT"; then
+    MATE_ADMIN_MISSING=true
+fi
+if [[ $WANT_UNITY == true ]] && ! root_user_is_admin "$UNITY_ROOT"; then
+    UNITY_ADMIN_MISSING=true
 fi
 if [[ $WANT_UNITY == true ]]; then
     missing_root_packages "$UNITY_ROOT" UNITY_MISSING \
@@ -357,6 +387,14 @@ if ((${#UNITY_MISSING[@]})); then
     printf '\n'
     differences=$((differences + 1))
 fi
+if [[ $MATE_ADMIN_MISSING == true ]]; then
+    printf 'MISSING MATE admin membership: %s is not in sudo\n' "$TARGET_USER"
+    differences=$((differences + 1))
+fi
+if [[ $UNITY_ADMIN_MISSING == true ]]; then
+    printf 'MISSING Unity admin membership: %s is not in sudo\n' "$TARGET_USER"
+    differences=$((differences + 1))
+fi
 
 if [[ $COMMAND == check ]]; then
     if ((differences)); then
@@ -428,6 +466,53 @@ if ((${#UNITY_MISSING[@]})); then
         -o Dir::Etc::sourceparts=- install -y --no-install-recommends \
         "${UNITY_MISSING[@]}"
 fi
+
+read_chroot_password() {
+    local first second
+    [[ -t 0 ]] ||
+        die "a terminal is required to set the Xenial administrative password"
+    while true; do
+        read -r -s -p "Set Xenial sudo password for $TARGET_USER: " first
+        printf '\n'
+        [[ -n $first ]] || {
+            echo "Password must not be empty." >&2
+            continue
+        }
+        read -r -s -p "Confirm Xenial sudo password: " second
+        printf '\n'
+        [[ $first == "$second" ]] || {
+            echo "Passwords do not match; try again." >&2
+            continue
+        }
+        CHROOT_PASSWORD=$first
+        CHROOT_PASSWORD_READY=true
+        return
+    done
+}
+
+configure_admin_account() {
+    local root=$1 password_field needs_password=$FORCE_RESET_CHROOT_PASSWORD
+    /usr/sbin/chroot "$root" usermod --append --groups sudo "$TARGET_USER"
+    password_field=$(awk -F: -v user="$TARGET_USER" \
+        '$1 == user {print $2}' "$root/etc/shadow")
+    case $password_field in
+        ''|'!'*|'*'*|'$y$'*|'$gy$'*) needs_password=true ;;
+    esac
+    if [[ $needs_password == true ]]; then
+        [[ $CHROOT_PASSWORD_READY == true ]] || read_chroot_password
+        printf '%s:%s\n' "$TARGET_USER" "$CHROOT_PASSWORD" |
+            /usr/sbin/chroot "$root" chpasswd
+    fi
+}
+
+if [[ $WANT_MATE == true ]]; then
+    configure_admin_account "$MATE_ROOT"
+fi
+if [[ $WANT_UNITY == true ]]; then
+    configure_admin_account "$UNITY_ROOT"
+fi
+CHROOT_PASSWORD=
+CHROOT_PASSWORD_READY=false
 
 if [[ $WANT_MATE == true ]]; then
     /usr/sbin/chroot "$MATE_ROOT" \

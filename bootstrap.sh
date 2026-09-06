@@ -12,6 +12,8 @@ MATE_ROOT=/srv/xenial
 UNITY_ROOT=/srv/xenial-unity
 MIRROR=http://archive.ubuntu.com/ubuntu/
 TARGET_LOCALE=en_US.UTF-8
+CHROOT_PASSWORD=
+CHROOT_PASSWORD_READY=false
 
 usage() {
     cat <<EOF
@@ -233,8 +235,38 @@ create_account() {
         /usr/sbin/chroot "$root" useradd --no-create-home --uid "$TARGET_UID" \
             --gid "$TARGET_GID" --home-dir "$TARGET_HOME" \
             --shell /bin/bash "$TARGET_USER"
-        /usr/sbin/chroot "$root" passwd --lock "$TARGET_USER"
     fi
+}
+
+read_chroot_password() {
+    local first second
+    [[ -t 0 ]] ||
+        die "a terminal is required to set the Xenial administrative password"
+    while true; do
+        read -r -s -p "Set Xenial sudo password for $TARGET_USER: " first
+        printf '\n'
+        [[ -n $first ]] || {
+            echo "Password must not be empty." >&2
+            continue
+        }
+        read -r -s -p "Confirm Xenial sudo password: " second
+        printf '\n'
+        [[ $first == "$second" ]] || {
+            echo "Passwords do not match; try again." >&2
+            continue
+        }
+        CHROOT_PASSWORD=$first
+        CHROOT_PASSWORD_READY=true
+        return
+    done
+}
+
+configure_admin_account() {
+    local root=$1
+    [[ $CHROOT_PASSWORD_READY == true ]] || read_chroot_password
+    /usr/sbin/chroot "$root" usermod --append --groups sudo "$TARGET_USER"
+    printf '%s:%s\n' "$TARGET_USER" "$CHROOT_PASSWORD" |
+        /usr/sbin/chroot "$root" chpasswd
 }
 
 configure_root() {
@@ -258,6 +290,7 @@ configure_root() {
     /usr/sbin/chroot "$root" locale-gen "$TARGET_LOCALE"
     printf 'LANG=%s\n' "$TARGET_LOCALE" >"$root/etc/default/locale"
     create_account "$root"
+    configure_admin_account "$root"
     /usr/sbin/chroot "$root" dbus-uuidgen --ensure=/etc/machine-id
 
     if [[ -e $root/etc/xdg/autostart/update-notifier.desktop ]]; then
@@ -282,6 +315,9 @@ if [[ $WANT_UNITY == true ]]; then
     configure_root "$UNITY_ROOT" Unity \
         "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}" "${UNITY_ESSENTIALS[@]}"
 fi
+
+CHROOT_PASSWORD=
+CHROOT_PASSWORD_READY=false
 
 cat <<EOF
 
