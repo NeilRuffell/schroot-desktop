@@ -26,7 +26,7 @@ The installer:
 - installs missing Debian or chroot packages only with the explicit
   `--install-packages` option.
 
-For existing roots, the installer adds a project-owned Xenial EOL source under
+For existing roots, the installer adds a project-owned Xenial source under
 `sources.list.d` and uses only that source for opted-in chroot package work. It
 does not overwrite the root's main `sources.list`, and APT signature checking
 remains enabled.
@@ -82,8 +82,9 @@ sudo ./bootstrap.sh create --apply --install-host-packages
 sudo ./install.sh install --install-packages
 ```
 
-Bootstrap refuses to overwrite either root path. It uses the Xenial EOL archive
-without disabling signature verification, prevents package post-install scripts
+Bootstrap refuses to overwrite either root path. It verifies that the Xenial
+release file exists before invoking debootstrap, retains APT signature
+verification, prevents package post-install scripts
 from starting system services, creates a locked matching chroot account without
 a private home, and keeps MATE and Unity in separate roots.
 
@@ -98,10 +99,9 @@ The MATE integration also installs a system GSettings override that removes
 autostart own the Debian Caja launch without embedding any user's dconf database
 in the project.
 
-[Ubuntu's EOL guidance](https://help.ubuntu.com/community/EOLUpgrades)
-documents moving an unchanged release codename to `old-releases.ubuntu.com`;
-bootstrap follows that pattern for `xenial`, `xenial-updates`, and
-`xenial-security`.
+The default mirror is `archive.ubuntu.com`, where the Xenial release and update
+pockets remain available. The mirror is configurable for installations that
+use a local archive.
 
 Bootstrap remains separate from integration updates so a routine bridge upgrade
 never rebuilds or broadly modifies a working root.

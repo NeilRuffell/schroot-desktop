@@ -9,7 +9,7 @@ INSTALL_HOST_PACKAGES=false
 TARGET_USER=${SUDO_USER:-${USER:-}}
 MATE_ROOT=/srv/xenial
 UNITY_ROOT=/srv/xenial-unity
-MIRROR=http://old-releases.ubuntu.com/ubuntu/
+MIRROR=http://archive.ubuntu.com/ubuntu/
 TARGET_LOCALE=en_US.UTF-8
 
 usage() {
@@ -173,6 +173,10 @@ if ((${#BOOTSTRAP_HOST_MISSING[@]})); then
 fi
 UBUNTU_KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 [[ -r $UBUNTU_KEYRING ]] || die "Ubuntu archive keyring is missing"
+command -v wget >/dev/null || die "wget is required to validate the mirror"
+RELEASE_URL=${MIRROR%/}/dists/xenial/Release
+wget --spider --quiet "$RELEASE_URL" ||
+    die "Xenial release file is unavailable: $RELEASE_URL"
 
 create_account() {
     local root=$1 group_name existing_user
@@ -204,8 +208,6 @@ configure_root() {
         "deb $MIRROR xenial-updates main restricted universe multiverse" \
         "deb $MIRROR xenial-security main restricted universe multiverse" \
         >"$root/etc/apt/sources.list"
-    printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
-        >"$root/etc/apt/apt.conf.d/99schroot-desktop-eol"
     printf '%s\n' '#!/bin/sh' 'exit 101' >"$root/usr/sbin/policy-rc.d"
     chmod 0755 "$root/usr/sbin/policy-rc.d"
 

@@ -7,7 +7,7 @@ COMMAND=check
 TARGET_USER=${SUDO_USER:-${USER:-}}
 MATE_ROOT=/srv/xenial
 UNITY_ROOT=/srv/xenial-unity
-MIRROR=http://old-releases.ubuntu.com/ubuntu/
+MIRROR=http://archive.ubuntu.com/ubuntu/
 DRY_RUN=false
 INSTALL_PACKAGES=false
 BACKUP_DIR=
@@ -40,7 +40,7 @@ Options:
   --target-user USER       Desktop account (default: SUDO_USER/current user)
   --mate-root PATH         Existing MATE root (default: /srv/xenial)
   --unity-root PATH        Existing Unity root (default: /srv/xenial-unity)
-  --mirror URL             Xenial EOL archive mirror
+  --mirror URL             Xenial archive mirror
   --dry-run                Show install actions without changing the system
   --install-packages       Install missing host and chroot packages with APT
   -h, --help               Show this help
@@ -279,8 +279,6 @@ done
 for root in "$MATE_ROOT" "$UNITY_ROOT"; do
     add_file "$TEMP_DIR/xenial-sources.list" \
         "$root/etc/apt/sources.list.d/schroot-desktop.list" 0644 root:root
-    add_file config/chroot/99schroot-desktop-eol \
-        "$root/etc/apt/apt.conf.d/99schroot-desktop-eol" 0644 root:root
 done
 
 differences=0
