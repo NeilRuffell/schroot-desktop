@@ -57,10 +57,10 @@ Save all work, then open an SSH connection from another machine or switch to a
 text console with `Ctrl`+`Alt`+`F3`. From that independent terminal:
 
 ```bash
-cd /home/nruffell/Projects/schroot-desktop
+cd /path/to/schroot-desktop
 sudo systemctl stop lightdm
 sudo ./tools/schroot-session-maintenance audit
-sudo ./tools/schroot-session-maintenance repair --apply --target-user nruffell
+sudo ./tools/schroot-session-maintenance repair --apply
 sudo ./tools/schroot-session-maintenance audit
 sudo systemctl start lightdm
 ```

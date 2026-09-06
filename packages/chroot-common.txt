@@ -1,0 +1,5 @@
+# Common packages used by both Xenial desktop roots.
+ca-certificates
+dbus-x11
+locales
+python

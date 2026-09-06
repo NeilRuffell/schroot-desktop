@@ -113,6 +113,14 @@ documented in:
 
 - [`docs/INSTALLER.md`](docs/INSTALLER.md)
 
+Portable host, MATE, Unity-core, and Unity-essential package selections live in
+[`packages/`](packages/). These are curated project inputs rather than a dump of
+the reference machine's installed-package database.
+
+The inclusion and exclusion rules for those manifests are documented in:
+
+- [`docs/PACKAGE-POLICY.md`](docs/PACKAGE-POLICY.md)
+
 The handoff is the canonical technical checkpoint and is updated only after a troubleshooting item is finished and accepted.
 
 ## Design rules

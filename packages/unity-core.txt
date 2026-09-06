@@ -1,0 +1,22 @@
+# Xenial Unity shell and integration. Hardware services remain host-owned.
+hud
+indicator-application
+indicator-appmenu
+indicator-datetime
+indicator-keyboard
+indicator-messages
+indicator-power
+indicator-session
+indicator-sound
+iso-codes
+light-themes
+nautilus
+session-shortcuts
+ubuntu-session
+ubuntu-settings
+unity
+unity-control-center
+unity-lens-applications
+unity-lens-files
+upstart
+zeitgeist-core

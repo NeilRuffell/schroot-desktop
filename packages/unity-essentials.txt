@@ -1,0 +1,7 @@
+# Small native fallback set for a usable Unity session.
+eog
+evince
+file-roller
+gedit
+gnome-calculator
+gnome-terminal

@@ -1,0 +1,19 @@
+# Debian host packages required by the integration layer.
+appmenu-gtk3-module
+blueman
+caja
+dbus-x11
+desktop-file-utils
+gir1.2-dbusmenu-glib-0.4
+gir1.2-dbusmenu-gtk3-0.4
+gir1.2-gtk-3.0
+gvfs
+gvfs-backends
+gvfs-fuse
+lightdm
+lxappearance
+mate-polkit
+python3
+python3-gi
+schroot
+x11-utils

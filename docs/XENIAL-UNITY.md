@@ -86,7 +86,7 @@ Schroot definition:
 description=Ubuntu Unity 16.04 Xenial
 type=directory
 directory=/srv/xenial-unity
-users=nruffell
+users=<desktop-user>
 preserve-environment=true
 profile=xenial-unity-desktop
 setup.nssdatabases=

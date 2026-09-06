@@ -7,18 +7,27 @@ COMMAND=check
 TARGET_USER=${SUDO_USER:-${USER:-}}
 MATE_ROOT=/srv/xenial
 UNITY_ROOT=/srv/xenial-unity
+MIRROR=http://old-releases.ubuntu.com/ubuntu/
 DRY_RUN=false
 INSTALL_PACKAGES=false
 BACKUP_DIR=
 TEMP_DIR=
 
-HOST_PACKAGES=(
-    schroot lightdm dbus-x11 python3 python3-gi
-    appmenu-gtk3-module gir1.2-dbusmenu-glib-0.4
-    gir1.2-dbusmenu-gtk3-0.4 gir1.2-gtk-3.0
-    x11-utils desktop-file-utils mate-polkit blueman
-    caja gvfs gvfs-backends gvfs-fuse lxappearance
-)
+HOST_PACKAGES=()
+COMMON_PACKAGES=()
+MATE_PACKAGES=()
+UNITY_PACKAGES=()
+
+read_packages() {
+    local manifest=$1 array_name=$2 line
+    local -n destination=$array_name
+    [[ -r $manifest ]] || die "package manifest is missing: $manifest"
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%%#*}
+        read -r line <<<"$line"
+        [[ -n $line ]] && destination+=("$line")
+    done <"$manifest"
+}
 
 usage() {
     cat <<EOF
@@ -31,8 +40,9 @@ Options:
   --target-user USER       Desktop account (default: SUDO_USER/current user)
   --mate-root PATH         Existing MATE root (default: /srv/xenial)
   --unity-root PATH        Existing Unity root (default: /srv/xenial-unity)
+  --mirror URL             Xenial EOL archive mirror
   --dry-run                Show install actions without changing the system
-  --install-packages       Install missing Debian host dependencies with APT
+  --install-packages       Install missing host and chroot packages with APT
   -h, --help               Show this help
 EOF
 }
@@ -73,6 +83,11 @@ while (($#)); do
             UNITY_ROOT=$2
             shift
             ;;
+        --mirror)
+            (($# >= 2)) || die "--mirror requires a value"
+            MIRROR=$2
+            shift
+            ;;
         --dry-run)
             DRY_RUN=true
             ;;
@@ -98,6 +113,13 @@ done
 [[ $MATE_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsupported MATE root path"
 [[ $UNITY_ROOT =~ ^/[A-Za-z0-9._/-]+$ ]] || die "unsupported Unity root path"
 [[ $MATE_ROOT != "$UNITY_ROOT" ]] || die "MATE and Unity roots must be different"
+[[ $MIRROR =~ ^https?://[A-Za-z0-9._:/-]+$ ]] || die "unsupported mirror URL"
+
+read_packages "$REPO_DIR/packages/host-integration.txt" HOST_PACKAGES
+read_packages "$REPO_DIR/packages/chroot-common.txt" COMMON_PACKAGES
+read_packages "$REPO_DIR/packages/mate-core.txt" MATE_PACKAGES
+read_packages "$REPO_DIR/packages/unity-core.txt" UNITY_PACKAGES
+read_packages "$REPO_DIR/packages/unity-essentials.txt" UNITY_PACKAGES
 
 command -v getent >/dev/null || die "getent is required"
 USER_RECORD=$(getent passwd "$TARGET_USER") || die "unknown user: $TARGET_USER"
@@ -140,6 +162,26 @@ for package in "${HOST_PACKAGES[@]}"; do
     fi
 done
 
+missing_root_packages() {
+    local root=$1 output_name=$2 package
+    shift 2
+    local -n output=$output_name
+    for package in "$@"; do
+        if ! dpkg-query --admindir="$root/var/lib/dpkg" \
+            -W -f='${db:Status-Status}' "$package" 2>/dev/null |
+            grep -qx installed; then
+            output+=("$package")
+        fi
+    done
+}
+
+MATE_MISSING=()
+UNITY_MISSING=()
+missing_root_packages "$MATE_ROOT" MATE_MISSING \
+    "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
+missing_root_packages "$UNITY_ROOT" UNITY_MISSING \
+    "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}"
+
 TEMP_DIR=$(mktemp -d -t schroot-desktop-install.XXXXXXXX)
 
 render() {
@@ -150,6 +192,7 @@ render() {
         -e "s|@UID@|$TARGET_UID|g" \
         -e "s|@MATE_ROOT@|$MATE_ROOT|g" \
         -e "s|@UNITY_ROOT@|$UNITY_ROOT|g" \
+        -e "s|@MIRROR@|$MIRROR|g" \
         "$source" >"$destination"
 }
 
@@ -209,14 +252,22 @@ add_file payload/chroot/mate/usr/local/bin/host-run \
     "$MATE_ROOT/usr/local/bin/host-run" 0755 root:root
 add_file payload/chroot/mate/usr/local/bin/caja \
     "$MATE_ROOT/usr/local/bin/caja" 0755 root:root
+add_file config/chroot/mate/99-schroot-desktop.gschema.override \
+    "$MATE_ROOT/usr/share/glib-2.0/schemas/99-schroot-desktop.gschema.override" \
+    0644 root:root
 add_file payload/chroot/unity/usr/local/bin/host-run \
     "$UNITY_ROOT/usr/local/bin/host-run" 0755 root:root
+add_file config/chroot/policy-rc.d \
+    "$MATE_ROOT/usr/sbin/policy-rc.d" 0755 root:root
+add_file config/chroot/policy-rc.d \
+    "$UNITY_ROOT/usr/sbin/policy-rc.d" 0755 root:root
 add_file config/user/debian-caja-desktop.desktop \
     "$TARGET_HOME/.config/autostart/debian-caja-desktop.desktop" 0664 "$TARGET_UID:$TARGET_GID"
 
 render config/schroot/xenial.conf.in "$TEMP_DIR/xenial.conf"
 render config/schroot/xenial-unity.conf.in "$TEMP_DIR/xenial-unity.conf"
 render config/schroot/xenial-desktop.fstab.in "$TEMP_DIR/fstab"
+render config/chroot/xenial-sources.list.in "$TEMP_DIR/xenial-sources.list"
 add_file "$TEMP_DIR/xenial.conf" /etc/schroot/chroot.d/xenial.conf 0644 root:root
 add_file "$TEMP_DIR/xenial-unity.conf" /etc/schroot/chroot.d/xenial-unity.conf 0644 root:root
 for profile in xenial-desktop xenial-unity-desktop; do
@@ -224,6 +275,12 @@ for profile in xenial-desktop xenial-unity-desktop; do
     add_file config/schroot/copyfiles "/etc/schroot/$profile/copyfiles" 0644 root:root
     : >"$TEMP_DIR/nssdatabases"
     add_file "$TEMP_DIR/nssdatabases" "/etc/schroot/$profile/nssdatabases" 0644 root:root
+done
+for root in "$MATE_ROOT" "$UNITY_ROOT"; do
+    add_file "$TEMP_DIR/xenial-sources.list" \
+        "$root/etc/apt/sources.list.d/schroot-desktop.list" 0644 root:root
+    add_file config/chroot/99schroot-desktop-eol \
+        "$root/etc/apt/apt.conf.d/99schroot-desktop-eol" 0644 root:root
 done
 
 differences=0
@@ -244,6 +301,18 @@ done
 if ((${#missing_packages[@]})); then
     printf 'MISSING host packages:'
     printf ' %s' "${missing_packages[@]}"
+    printf '\n'
+    differences=$((differences + 1))
+fi
+if ((${#MATE_MISSING[@]})); then
+    printf 'MISSING MATE packages:'
+    printf ' %s' "${MATE_MISSING[@]}"
+    printf '\n'
+    differences=$((differences + 1))
+fi
+if ((${#UNITY_MISSING[@]})); then
+    printf 'MISSING Unity packages:'
+    printf ' %s' "${UNITY_MISSING[@]}"
     printf '\n'
     differences=$((differences + 1))
 fi
@@ -269,13 +338,10 @@ if find /var/lib/schroot/session -maxdepth 1 -type f -print -quit 2>/dev/null |
     die "schroot session records exist; log out and repair or end them before installation"
 fi
 
-if ((${#missing_packages[@]})); then
+if ((${#missing_packages[@]} || ${#MATE_MISSING[@]} || ${#UNITY_MISSING[@]})); then
     [[ $INSTALL_PACKAGES == true ]] ||
-        die "host dependencies are missing; rerun with --install-packages"
-    apt-get update
-    apt-get install -y "${missing_packages[@]}"
+        die "package dependencies are missing; rerun with --install-packages"
 fi
-
 BACKUP_DIR=/var/backups/schroot-desktop/installer-$(date +%Y%m%d-%H%M%S)
 
 for index in "${!SOURCES[@]}"; do
@@ -298,6 +364,31 @@ for index in "${!SOURCES[@]}"; do
         "$source_path" "$destination"
     note "INSTALL $destination"
 done
+
+if ((${#missing_packages[@]})); then
+    apt-get update
+    apt-get install -y "${missing_packages[@]}"
+fi
+if ((${#MATE_MISSING[@]})); then
+    /usr/sbin/chroot "$MATE_ROOT" apt-get \
+        -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
+        -o Dir::Etc::sourceparts=- update
+    /usr/sbin/chroot "$MATE_ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+        apt-get -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
+        -o Dir::Etc::sourceparts=- install -y --no-install-recommends \
+        "${MATE_MISSING[@]}"
+fi
+if ((${#UNITY_MISSING[@]})); then
+    /usr/sbin/chroot "$UNITY_ROOT" apt-get \
+        -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
+        -o Dir::Etc::sourceparts=- update
+    /usr/sbin/chroot "$UNITY_ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+        apt-get -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
+        -o Dir::Etc::sourceparts=- install -y --no-install-recommends \
+        "${UNITY_MISSING[@]}"
+fi
+
+/usr/sbin/chroot "$MATE_ROOT" glib-compile-schemas /usr/share/glib-2.0/schemas
 
 for root in "$MATE_ROOT" "$UNITY_ROOT"; do
     install -d -m 0755 "$root/host-xdg/applications" \
