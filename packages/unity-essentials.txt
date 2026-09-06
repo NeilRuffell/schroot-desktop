@@ -5,3 +5,4 @@ file-roller
 gedit
 gnome-calculator
 gnome-terminal
+synaptic

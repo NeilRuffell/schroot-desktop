@@ -8,7 +8,9 @@ packages.
 ## Debian host
 
 `packages/host-common.txt` contains the shared schroot, LightDM, PolicyKit,
-Python, D-Bus, and desktop-database dependencies. `packages/host-mate.txt` adds
+Python, D-Bus, Synaptic, and desktop-database dependencies. Host Synaptic is an
+integration dependency because native Xenial Synaptic authenticates through the
+host PolicyKit environment. `packages/host-mate.txt` adds
 only Caja/GVfs and Blueman integration; `packages/host-unity.txt` adds only the
 GObject, appmenu/DBusMenu, X11-property, and Host-theme dependencies used by
 Unity. Selecting one desktop therefore does not install the other desktop's
@@ -26,10 +28,12 @@ matching administrative desktop account.
 
 ## Unity
 
-`packages/unity-core.txt` contains the shell, session, native Nautilus, settings,
-themes, indicators, HUD, lenses, and search integration.
+`packages/unity-core.txt` contains the official `ubuntu-desktop` metapackage plus
+explicit shell, session, native Nautilus, settings, themes, indicators, HUD,
+lenses, and search integration. Installation includes the metapackage's normal
+recommendations to provide the complete Xenial Unity application experience.
 
-`packages/unity-essentials.txt` supplies a deliberately small native fallback:
+`packages/unity-essentials.txt` explicitly protects the essential native tools:
 
 - GNOME Terminal
 - gedit
@@ -37,31 +41,30 @@ themes, indicators, HUD, lenses, and search integration.
 - Evince
 - File Roller
 - GNOME Calculator
+- Synaptic
 
 A terminal and editor are necessary for diagnosis when the Host bridge is not
-available. The other small utilities make a fresh desktop usable without adding
-obsolete network-facing applications.
+available. These remain required even if the metapackage changes.
 
 ## MATE
 
-`packages/mate-core.txt` contains the MATE shell, Marco, panel, settings,
-themes, classic utilities, the tested Compton compositor, and native Caja/GVfs
-as a rollback path. Debian Caja remains the normal file manager after the
+`packages/mate-core.txt` contains the official `ubuntu-mate-desktop` metapackage,
+Synaptic, the MATE shell, Marco, panel, settings, themes, classic utilities, the
+tested Compton compositor, and native Caja/GVfs as a rollback path. Normal
+metapackage recommendations are installed. Debian Caja remains the normal file manager after the
 integration layer is installed. The integration supplies its MATE session
 setting as a system schema default; it does not copy a reference user's dconf
 database.
 
-## Explicit exclusions
+## Runtime ownership
 
-The manifests do not directly install:
-
-- `ubuntu-desktop` or `ubuntu-mate-desktop`;
-- Xenial kernels, firmware, Xorg servers, or display managers;
-- Xenial NetworkManager, UDisks, UPower, BlueZ, or PulseAudio services;
-- Xenial update managers, software stores, or release-upgrade tools; or
-- legacy browsers, mail clients, office suites, and media suites.
-
-Some desktop packages may depend on client libraries or service packages with
-similar names. Package presence does not transfer runtime service ownership away
-from Debian, and persistent `policy-rc.d` prevents package maintenance from
-starting system daemons inside either root.
+The official desktop metapackages include Xorg, hardware-service packages,
+update tools, and classic applications. Their presence is intentional because
+the baseline is now a complete Xenial desktop rather than a minimal shell.
+Package presence does not transfer runtime ownership away from Debian.
+Persistent `policy-rc.d` prevents package maintenance from starting system
+daemons inside either root, the Debian Xorg/LightDM session remains outermost,
+and the schroot wrappers select the host buses and runtime endpoints. Conflicting
+Xenial update-notifier and graphical PolicyKit autostarts are diverted; MATE's
+Xenial Blueman autostart is also diverted because the outer Debian session owns
+those roles.

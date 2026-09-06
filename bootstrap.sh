@@ -14,6 +14,7 @@ MIRROR=http://archive.ubuntu.com/ubuntu/
 TARGET_LOCALE=en_US.UTF-8
 CHROOT_PASSWORD=
 CHROOT_PASSWORD_READY=false
+ACTIVE_STAGING=
 
 usage() {
     cat <<EOF
@@ -39,6 +40,15 @@ die() {
     echo "ERROR: $*" >&2
     exit 2
 }
+
+cleanup() {
+    CHROOT_PASSWORD=
+    CHROOT_PASSWORD_READY=false
+    if [[ -n $ACTIVE_STAGING && -d $ACTIVE_STAGING ]]; then
+        rm -rf --one-file-system -- "$ACTIVE_STAGING"
+    fi
+}
+trap cleanup EXIT
 
 read_manifest() {
     local manifest=$1 array_name=$2 line
@@ -269,6 +279,14 @@ configure_admin_account() {
         /usr/sbin/chroot "$root" chpasswd
 }
 
+disable_root_autostart() {
+    local root=$1 path=$2
+    if [[ -e $root$path ]] &&
+        ! /usr/sbin/chroot "$root" dpkg-divert --list "$path" | grep -q .; then
+        /usr/sbin/chroot "$root" dpkg-divert --local --rename --add "$path"
+    fi
+}
+
 configure_root() {
     local root=$1 desktop=$2
     shift 2
@@ -285,7 +303,7 @@ configure_root() {
     /usr/sbin/chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
         apt-get update
     /usr/sbin/chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y --no-install-recommends "${packages[@]}"
+        apt-get install -y --install-recommends "${packages[@]}"
 
     /usr/sbin/chroot "$root" locale-gen "$TARGET_LOCALE"
     printf 'LANG=%s\n' "$TARGET_LOCALE" >"$root/etc/default/locale"
@@ -293,26 +311,40 @@ configure_root() {
     configure_admin_account "$root"
     /usr/sbin/chroot "$root" dbus-uuidgen --ensure=/etc/machine-id
 
-    if [[ -e $root/etc/xdg/autostart/update-notifier.desktop ]]; then
-        /usr/sbin/chroot "$root" dpkg-divert --local --rename --add \
-            /etc/xdg/autostart/update-notifier.desktop
+    disable_root_autostart "$root" /etc/xdg/autostart/update-notifier.desktop
+    if [[ $desktop == MATE ]]; then
+        disable_root_autostart "$root" /etc/xdg/autostart/blueman.desktop
+        disable_root_autostart "$root" \
+            /etc/xdg/autostart/polkit-mate-authentication-agent-1.desktop
+    else
+        disable_root_autostart "$root" \
+            /etc/xdg/autostart/polkit-gnome-authentication-agent-1.desktop
     fi
     echo "Configured $desktop root: $root"
 }
 
-if [[ $WANT_MATE == true ]]; then
-    echo "Bootstrapping MATE root..."
+bootstrap_root() {
+    local desktop=$1 destination=$2
+    shift 2
+    local parent=${destination%/*} staging
+    install -d -m 0755 "$parent"
+    staging=$(mktemp -d "$parent/.schroot-desktop-${desktop,,}.XXXXXXXX")
+    ACTIVE_STAGING=$staging
+    echo "Bootstrapping $desktop root..."
     debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
-        xenial "$MATE_ROOT" "$MIRROR"
-    configure_root "$MATE_ROOT" MATE \
+        xenial "$staging" "$MIRROR"
+    configure_root "$staging" "$desktop" "$@"
+    mv -- "$staging" "$destination"
+    ACTIVE_STAGING=
+}
+
+if [[ $WANT_MATE == true ]]; then
+    bootstrap_root MATE "$MATE_ROOT" \
         "${COMMON_PACKAGES[@]}" "${MATE_PACKAGES[@]}"
 fi
 
 if [[ $WANT_UNITY == true ]]; then
-    echo "Bootstrapping Unity root..."
-    debootstrap --arch=amd64 --keyring="$UBUNTU_KEYRING" \
-        xenial "$UNITY_ROOT" "$MIRROR"
-    configure_root "$UNITY_ROOT" Unity \
+    bootstrap_root Unity "$UNITY_ROOT" \
         "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}" "${UNITY_ESSENTIALS[@]}"
 fi
 

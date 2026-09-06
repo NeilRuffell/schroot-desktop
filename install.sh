@@ -177,7 +177,8 @@ fi
 [[ $(dpkg --print-architecture) == amd64 ]] || die "only amd64 is currently tested"
 
 validate_root() {
-    local label=$1 root=$2 root_user
+    local label=$1 root=$2 missing_name=$3 root_user
+    local -n account_missing=$missing_name
     [[ -d $root ]] || die "$label root does not exist: $root"
     [[ -r $root/etc/os-release ]] || die "$label root has no /etc/os-release"
     (
@@ -186,12 +187,18 @@ validate_root() {
         [[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 16.04 ]]
     ) || die "$label root is not Ubuntu 16.04: $root"
     root_user=$(awk -F: -v user="$TARGET_USER" '$1 == user {print $3 ":" $4}' "$root/etc/passwd")
+    if [[ -z $root_user ]]; then
+        account_missing=true
+        return
+    fi
     [[ $root_user == "$TARGET_UID:$TARGET_GID" ]] ||
         die "$TARGET_USER must be UID:GID $TARGET_UID:$TARGET_GID in $label root"
 }
 
-[[ $WANT_MATE == false ]] || validate_root MATE "$MATE_ROOT"
-[[ $WANT_UNITY == false ]] || validate_root Unity "$UNITY_ROOT"
+MATE_ACCOUNT_MISSING=false
+UNITY_ACCOUNT_MISSING=false
+[[ $WANT_MATE == false ]] || validate_root MATE "$MATE_ROOT" MATE_ACCOUNT_MISSING
+[[ $WANT_UNITY == false ]] || validate_root Unity "$UNITY_ROOT" UNITY_ACCOUNT_MISSING
 
 missing_packages=()
 for package in "${HOST_PACKAGES[@]}"; do
@@ -223,6 +230,13 @@ fi
 
 MATE_ADMIN_MISSING=false
 UNITY_ADMIN_MISSING=false
+MATE_AUTH_MISSING=false
+UNITY_AUTH_MISSING=false
+MATE_AUTOSTART_MISSING=()
+UNITY_AUTOSTART_MISSING=()
+HOST_SYNC_DISABLED=false
+HOST_SYNAPTIC_MIRROR_MISSING=false
+PERMANENT_LAUNCHER_LINKS=()
 root_user_is_admin() {
     local root=$1 user_gid sudo_gid members
     user_gid=$(awk -F: -v user="$TARGET_USER" \
@@ -234,16 +248,63 @@ root_user_is_admin() {
     [[ $user_gid == "$sudo_gid" ]] && return 0
     [[ ,${members:-}, == *,"$TARGET_USER",* ]]
 }
-if [[ $WANT_MATE == true ]] && ! root_user_is_admin "$MATE_ROOT"; then
+if [[ $WANT_MATE == true && $MATE_ACCOUNT_MISSING == false ]] &&
+    ! root_user_is_admin "$MATE_ROOT"; then
     MATE_ADMIN_MISSING=true
 fi
-if [[ $WANT_UNITY == true ]] && ! root_user_is_admin "$UNITY_ROOT"; then
+if [[ $WANT_UNITY == true && $UNITY_ACCOUNT_MISSING == false ]] &&
+    ! root_user_is_admin "$UNITY_ROOT"; then
     UNITY_ADMIN_MISSING=true
+fi
+root_password_needs_reset() {
+    local root=$1 password_field
+    password_field=$(awk -F: -v user="$TARGET_USER" \
+        '$1 == user {print $2}' "$root/etc/shadow")
+    case $password_field in
+        ''|'!'*|'*'*|'$y$'*|'$gy$'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+if ((EUID == 0)) && [[ $WANT_MATE == true && $MATE_ACCOUNT_MISSING == false ]] &&
+    root_password_needs_reset "$MATE_ROOT"; then
+    MATE_AUTH_MISSING=true
+fi
+if ((EUID == 0)) && [[ $WANT_UNITY == true && $UNITY_ACCOUNT_MISSING == false ]] &&
+    root_password_needs_reset "$UNITY_ROOT"; then
+    UNITY_AUTH_MISSING=true
+fi
+if [[ $WANT_MATE == true ]]; then
+    for path in update-notifier.desktop blueman.desktop \
+        polkit-mate-authentication-agent-1.desktop; do
+        [[ ! -e $MATE_ROOT/etc/xdg/autostart/$path ]] ||
+            MATE_AUTOSTART_MISSING+=("$path")
+    done
+fi
+if [[ $WANT_UNITY == true && \
+    -e $UNITY_ROOT/etc/xdg/autostart/update-notifier.desktop ]]; then
+    UNITY_AUTOSTART_MISSING+=(update-notifier.desktop)
+fi
+if [[ $WANT_UNITY == true && \
+    -e $UNITY_ROOT/etc/xdg/autostart/polkit-gnome-authentication-agent-1.desktop ]]; then
+    UNITY_AUTOSTART_MISSING+=(polkit-gnome-authentication-agent-1.desktop)
 fi
 if [[ $WANT_UNITY == true ]]; then
     missing_root_packages "$UNITY_ROOT" UNITY_MISSING \
         "${COMMON_PACKAGES[@]}" "${UNITY_PACKAGES[@]}"
 fi
+if ! systemctl is-enabled --quiet maverick-host-app-sync.path 2>/dev/null; then
+    HOST_SYNC_DISABLED=true
+fi
+if dpkg-query -W -f='${db:Status-Status}' synaptic 2>/dev/null |
+    grep -qx installed; then
+    [[ -f /var/lib/maverick-host-apps/applications/debian-synaptic.desktop ]] ||
+        HOST_SYNAPTIC_MIRROR_MISSING=true
+fi
+for link in \
+    /etc/systemd/user/default.target.wants/maverick-host-launcher.service \
+    "$TARGET_HOME/.config/systemd/user/default.target.wants/maverick-host-launcher.service"; do
+    [[ ! -e $link && ! -L $link ]] || PERMANENT_LAUNCHER_LINKS+=("$link")
+done
 
 TEMP_DIR=$(mktemp -d -t schroot-desktop-install.XXXXXXXX)
 
@@ -395,6 +456,48 @@ if [[ $UNITY_ADMIN_MISSING == true ]]; then
     printf 'MISSING Unity admin membership: %s is not in sudo\n' "$TARGET_USER"
     differences=$((differences + 1))
 fi
+if [[ $MATE_ACCOUNT_MISSING == true ]]; then
+    printf 'MISSING MATE account: %s\n' "$TARGET_USER"
+    differences=$((differences + 1))
+fi
+if [[ $UNITY_ACCOUNT_MISSING == true ]]; then
+    printf 'MISSING Unity account: %s\n' "$TARGET_USER"
+    differences=$((differences + 1))
+fi
+if [[ $MATE_AUTH_MISSING == true ]]; then
+    printf 'MISSING MATE password: account is locked or incompatible\n'
+    differences=$((differences + 1))
+fi
+if [[ $UNITY_AUTH_MISSING == true ]]; then
+    printf 'MISSING Unity password: account is locked or incompatible\n'
+    differences=$((differences + 1))
+fi
+if ((${#MATE_AUTOSTART_MISSING[@]})); then
+    printf 'ACTIVE conflicting MATE autostarts:'
+    printf ' %s' "${MATE_AUTOSTART_MISSING[@]}"
+    printf '\n'
+    differences=$((differences + 1))
+fi
+if ((${#UNITY_AUTOSTART_MISSING[@]})); then
+    printf 'ACTIVE conflicting Unity autostarts:'
+    printf ' %s' "${UNITY_AUTOSTART_MISSING[@]}"
+    printf '\n'
+    differences=$((differences + 1))
+fi
+if [[ $HOST_SYNC_DISABLED == true ]]; then
+    printf 'DISABLED host application synchronization path unit\n'
+    differences=$((differences + 1))
+fi
+if [[ $HOST_SYNAPTIC_MIRROR_MISSING == true ]]; then
+    printf 'MISSING Synaptic Host launcher mirror\n'
+    differences=$((differences + 1))
+fi
+if ((${#PERMANENT_LAUNCHER_LINKS[@]})); then
+    printf 'ACTIVE permanently enabled host launcher:'
+    printf ' %s' "${PERMANENT_LAUNCHER_LINKS[@]}"
+    printf '\n'
+    differences=$((differences + 1))
+fi
 
 if [[ $COMMAND == check ]]; then
     if ((differences)); then
@@ -454,7 +557,7 @@ if ((${#MATE_MISSING[@]})); then
         -o Dir::Etc::sourceparts=- update
     /usr/sbin/chroot "$MATE_ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
         apt-get -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
-        -o Dir::Etc::sourceparts=- install -y --no-install-recommends \
+        -o Dir::Etc::sourceparts=- install -y --install-recommends \
         "${MATE_MISSING[@]}"
 fi
 if ((${#UNITY_MISSING[@]})); then
@@ -463,8 +566,34 @@ if ((${#UNITY_MISSING[@]})); then
         -o Dir::Etc::sourceparts=- update
     /usr/sbin/chroot "$UNITY_ROOT" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
         apt-get -o Dir::Etc::sourcelist=sources.list.d/schroot-desktop.list \
-        -o Dir::Etc::sourceparts=- install -y --no-install-recommends \
+        -o Dir::Etc::sourceparts=- install -y --install-recommends \
         "${UNITY_MISSING[@]}"
+fi
+
+normalize_root() {
+    local root=$1 desktop=$2 path
+    local paths=(/etc/xdg/autostart/update-notifier.desktop)
+    if [[ $desktop == mate ]]; then
+        paths+=(
+            /etc/xdg/autostart/blueman.desktop
+            /etc/xdg/autostart/polkit-mate-authentication-agent-1.desktop
+        )
+    else
+        paths+=(/etc/xdg/autostart/polkit-gnome-authentication-agent-1.desktop)
+    fi
+    for path in "${paths[@]}"; do
+        if [[ -e $root$path ]] &&
+            ! /usr/sbin/chroot "$root" dpkg-divert --list "$path" |
+                grep -q .; then
+            /usr/sbin/chroot "$root" dpkg-divert --local --rename --add "$path"
+        fi
+    done
+}
+if [[ $WANT_MATE == true ]]; then
+    normalize_root "$MATE_ROOT" mate
+fi
+if [[ $WANT_UNITY == true ]]; then
+    normalize_root "$UNITY_ROOT" unity
 fi
 
 read_chroot_password() {
@@ -490,6 +619,21 @@ read_chroot_password() {
     done
 }
 
+ensure_root_account() {
+    local root=$1 group_name root_user
+    root_user=$(awk -F: -v user="$TARGET_USER" \
+        '$1 == user {print $3 ":" $4}' "$root/etc/passwd")
+    [[ -z $root_user ]] || return
+    group_name=$(awk -F: -v gid="$TARGET_GID" \
+        '$3 == gid {print $1; exit}' "$root/etc/group")
+    if [[ -z $group_name ]]; then
+        /usr/sbin/chroot "$root" groupadd --gid "$TARGET_GID" "$TARGET_USER"
+    fi
+    /usr/sbin/chroot "$root" useradd --no-create-home --uid "$TARGET_UID" \
+        --gid "$TARGET_GID" --home-dir "$TARGET_HOME" \
+        --shell /bin/bash "$TARGET_USER"
+}
+
 configure_admin_account() {
     local root=$1 password_field needs_password=$FORCE_RESET_CHROOT_PASSWORD
     /usr/sbin/chroot "$root" usermod --append --groups sudo "$TARGET_USER"
@@ -506,9 +650,11 @@ configure_admin_account() {
 }
 
 if [[ $WANT_MATE == true ]]; then
+    ensure_root_account "$MATE_ROOT"
     configure_admin_account "$MATE_ROOT"
 fi
 if [[ $WANT_UNITY == true ]]; then
+    ensure_root_account "$UNITY_ROOT"
     configure_admin_account "$UNITY_ROOT"
 fi
 CHROOT_PASSWORD=
@@ -532,6 +678,12 @@ for root in "${SELECTED_ROOTS[@]}"; do
 done
 install -d -m 0755 /var/lib/maverick-host-apps/applications \
     /var/lib/maverick-host-apps/caja-xdg/applications
+
+for link in "${PERMANENT_LAUNCHER_LINKS[@]}"; do
+    [[ -L $link ]] || die "refusing non-symlink launcher enablement: $link"
+    unlink -- "$link"
+    note "DISABLE permanent host launcher $link"
+done
 
 systemctl daemon-reload
 systemctl enable --now maverick-host-app-sync.path

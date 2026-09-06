@@ -1,5 +1,15 @@
 # Integration installer
 
+For normal use, run the guided entry point from Debian:
+
+```bash
+sudo ./setup.sh
+```
+
+It asks which desktop to install, creates only missing roots, updates existing
+roots in place, installs the integration, and finishes with a static acceptance
+check. The lower-level scripts remain available for diagnosis and automation.
+
 The installer has two deliberately separate layers:
 
 - `bootstrap.sh` creates the selected fresh MATE and/or Unity Xenial roots and
@@ -28,7 +38,7 @@ The installer:
   writing to a user's dconf database;
 - does not permanently enable the session-scoped host launcher; and
 - installs missing Debian or chroot packages only with the explicit
-  `--install-packages` option.
+  `--install-packages` option;
 - installs `sudo`, adds the matching desktop account to its group, and prompts
   once for a Xenial administrative password when creating a root or repairing a
   locked/incompatible existing account.
@@ -102,8 +112,11 @@ scripts; normal installations do not supply it on the command line.
 Bootstrap refuses to overwrite either root path. It verifies that the Xenial
 release file exists before invoking debootstrap, retains APT signature
 verification, prevents package post-install scripts
-from starting system services, creates a locked matching chroot account without
-a private home, and keeps MATE and Unity in separate roots.
+from starting system services, creates a matching administrative chroot account
+without a private home, and keeps MATE and Unity in separate roots.
+Each root is built in a private staging directory and moved into its final path
+only after configuration succeeds. A failed bootstrap removes its own staging
+directory instead of leaving a partial `/srv/xenial*` root.
 
 The password prompt configures authentication inside Xenial; it cannot reuse a
 cached host `sudo` credential. You may enter the same password as the Debian
@@ -120,11 +133,16 @@ upgrade:
 sudo ./install.sh update --install-packages --desktop both
 ```
 
-Package selection is defined in `packages/`. The manifests deliberately exclude
-the oversized desktop metapackages, Xenial update/store clients, legacy browsers
-and mail clients, and hardware-facing services that belong to Debian. Unity's
-native essentials include a terminal, editor, image/PDF viewers, archive manager,
-and calculator so a fresh session is usable even if the Host bridge needs repair.
+Package selection is defined in `packages/`. Fresh and upgraded roots install
+the official `ubuntu-desktop` or `ubuntu-mate-desktop` experience with normal
+recommended packages. Synaptic is explicit on both Debian and Xenial so its
+privileged launcher and host PolicyKit policy are present. Package-maintenance
+service startup remains blocked inside the roots; Debian continues to own the
+real kernel, display server, hardware services, and current applications.
+
+The desktop metapackage and its recommendations establish the initial complete
+experience. If a user later removes an optional recommended application, routine
+integration updates do not enumerate and forcibly reinstall every recommendation.
 
 The MATE integration also installs a system GSettings override that removes
 `filemanager` from MATE's required-component list. This lets the normal Desktop

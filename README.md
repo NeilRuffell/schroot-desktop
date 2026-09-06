@@ -2,6 +2,12 @@
 
 Run classic Ubuntu desktop userspaces directly on a modern Debian host, on the real X11 desktop — no VM, no VNC/RDP, no Xephyr, and no nested display server.
 
+For a new installation or an in-place update, use the guided entry point:
+
+```bash
+sudo ./setup.sh
+```
+
 The current reference build uses:
 
 - **Debian 13** as the real host OS
@@ -112,6 +118,10 @@ The version-controlled integration installer for existing Xenial roots is
 documented in:
 
 - [`docs/INSTALLER.md`](docs/INSTALLER.md)
+
+The clean-machine release gate is documented in:
+
+- [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)
 
 Portable host-common, host-desktop, MATE, Unity-core, and Unity-essential package selections live in
 [`packages/`](packages/). These are curated project inputs rather than a dump of

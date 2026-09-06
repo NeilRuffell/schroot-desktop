@@ -2,5 +2,6 @@
 ca-certificates
 dbus-x11
 locales
+mesa-utils
 python
 sudo

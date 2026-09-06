@@ -26,9 +26,11 @@ mate-system-monitor
 mate-terminal
 mate-themes
 pluma
+synaptic
 topmenu-gtk-common
 topmenu-gtk2
 topmenu-gtk3
 ubuntu-mate-artwork
 ubuntu-mate-default-settings
+ubuntu-mate-desktop
 ubuntu-sounds

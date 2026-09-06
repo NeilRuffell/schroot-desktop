@@ -12,6 +12,7 @@ iso-codes
 light-themes
 nautilus
 session-shortcuts
+ubuntu-desktop
 ubuntu-session
 ubuntu-settings
 unity

@@ -5,3 +5,4 @@ lightdm
 mate-polkit
 python3
 schroot
+synaptic
